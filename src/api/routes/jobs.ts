@@ -1,8 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { isDuplicateKey, reuse } from "../../lib/idempotency.js";
+import { enqueue } from "../../outbox/enqueue.js";
 import { jobTypes, payloadSchemas, type JobType } from "../../queue/queues.js";
 import type { Deps } from "../server.js";
 
@@ -31,23 +30,8 @@ export function jobRoutes(app: FastifyInstance, { prisma, queues }: Deps) {
     const backlog = await prisma.jobRecord.count({ where: { tenant, status: { in: ["pending", "queued"] } } });
     if (backlog >= MAX_QUEUED_PER_TENANT) return reply.code(429).send({ error: `over ${MAX_QUEUED_PER_TENANT} queued jobs` });
 
-    // One transaction, no Redis: the outbox relay publishes after commit.
-    const jobId = randomUUID();
-    try {
-      const existing = await prisma.$transaction(async (tx) => {
-        const prev = idempotencyKey ? await reuse(tx, tenant, idempotencyKey) : null;
-        if (prev) return prev;
-        await tx.jobRecord.create({ data: { id: jobId, tenant, type, priority, idempotencyKey, payload: p.data as object } });
-        await tx.outbox.create({ data: { jobId, delayMs } });
-        return null;
-      });
-      if (existing) return reply.code(200).send({ jobId: existing, status: "queued" });
-    } catch (err) {
-      if (!idempotencyKey || !isDuplicateKey(err)) throw err;
-      const winner = await prisma.jobRecord.findUniqueOrThrow({ where: { tenant_idempotencyKey: { tenant, idempotencyKey } } });
-      return reply.code(200).send({ jobId: winner.id, status: "queued" });
-    }
-    return reply.code(202).send({ jobId, status: "queued" });
+    const { jobId, created } = await enqueue(prisma, { tenant, type: type as JobType, payload: p.data, priority, idempotencyKey, delayMs });
+    return reply.code(created ? 202 : 200).send({ jobId, status: "queued" });
   });
 
   app.get<{ Params: { id: string } }>("/jobs/:id", async (req, reply) => {

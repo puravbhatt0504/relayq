@@ -110,7 +110,7 @@ export function onSigterm(close: () => Promise<void>, exit: (code: number) => vo
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function main() {
   const connection = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", { maxRetriesPerRequest: null });
   const { dead } = createQueues(connection);
   const { close } = startWorkers({ connection, prisma: new PrismaClient(), dead });
@@ -121,3 +121,5 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   onSigterm(() => close().then(() => void metrics.close()));
   logger.info("worker started");
 }
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main();

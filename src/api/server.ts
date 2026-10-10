@@ -8,8 +8,9 @@ import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { registerQueueDepth, registry } from "../lib/metrics.js";
 import { cleanupOutbox, startRelay } from "../outbox/relay.js";
-import { createQueues, type Queues } from "../queue/queues.js";
+import { createQueues, jobTypes, type Queues } from "../queue/queues.js";
 import { authHook } from "./auth.js";
+import { demoRoutes } from "./demo.js";
 import { jobRoutes } from "./routes/jobs.js";
 
 export type Deps = { prisma: PrismaClient; redis: Redis; queues: Queues };
@@ -25,7 +26,7 @@ function basicAuth(user = process.env.ADMIN_USER, pass = process.env.ADMIN_PASSW
   };
 }
 
-export function buildApp(deps: Deps) {
+export function buildApp(deps: Deps, { demo = false } = {}) {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
   registerQueueDepth(deps.queues);
 
@@ -52,19 +53,34 @@ export function buildApp(deps: Deps) {
     authed.addHook("preHandler", authHook(deps.prisma));
     jobRoutes(authed, deps);
   });
+  if (demo) app.register(async (pub) => demoRoutes(pub, deps));
   return app;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function main() {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
   const deps = {
     prisma: new PrismaClient(),
     redis: new Redis(redisUrl),
     queues: createQueues(new Redis(redisUrl, { maxRetriesPerRequest: null })),
   };
-  const app = buildApp(deps);
+  const app = buildApp(deps, { demo: process.env.DEMO === "1" });
   await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
   // Outbox relay lives in the api process; several api instances are safe (SKIP LOCKED).
   startRelay(deps.prisma, deps.queues, { onError: (err) => app.log.error({ err }, "outbox relay failed") });
   setInterval(() => cleanupOutbox(deps.prisma).catch((err) => app.log.error({ err }, "outbox cleanup failed")), 86_400_000).unref();
+
+  // On ECS: queue depth as a CloudWatch metric (Embedded Metric Format on stdout, no SDK), for worker autoscaling.
+  if (process.env.EMF_NAMESPACE) {
+    setInterval(async () => {
+      const counts = await Promise.all(jobTypes.map((t) => deps.queues[t].getJobCounts("waiting", "prioritized", "delayed")));
+      const depth = counts.reduce((n, c) => n + c.waiting + c.prioritized + c.delayed, 0);
+      console.log(JSON.stringify({
+        _aws: { Timestamp: Date.now(), CloudWatchMetrics: [{ Namespace: process.env.EMF_NAMESPACE, Dimensions: [[]], Metrics: [{ Name: "QueueDepth", Unit: "Count" }] }] },
+        QueueDepth: depth,
+      }));
+    }, 30_000).unref();
+  }
 }
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await main();
