@@ -1,0 +1,33 @@
+{
+  "name": "relayq",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/api/server.ts",
+    "start": "node dist/api/server.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:push": "prisma db push"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bullmq": "^5.81.5",
+    "fastify": "^4.29.1",
+    "ioredis": "^5.11.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.28.0",
+    "@testcontainers/redis": "^10.28.0",
+    "@types/node": "^20.19.43",
+    "prisma": "^6.19.3",
+    "testcontainers": "^10.28.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

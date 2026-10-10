@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ApiKey {
+  hash      String   @id // sha256 hex of the full "rq_..." key
+  tenant    String
+  createdAt DateTime @default(now())
+}
+
+model JobRecord {
+  id        String   @id
+  tenant    String
+  type      String
+  status    String   @default("queued") // queued|active|completed|failed|dead
+  payload   Json
+  attempts  Int      @default(0)
+  result    Json?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenant, status])
+}
