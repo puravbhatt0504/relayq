@@ -5,4 +5,5 @@ export default tseslint.config(
   { ignores: ["dist", "node_modules", "coverage"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  { files: ["load/**"], languageOptions: { globals: { __ENV: "readonly", __VU: "readonly", __ITER: "readonly" } } },
 );
