@@ -12,6 +12,8 @@ x-app: &app
     PULSEBOARD_URL: ${PULSEBOARD_URL:-http://host.docker.internal:4000}
     PULSEBOARD_TOKEN: ${PULSEBOARD_TOKEN:-}
     EXPORT_BUCKET: ${EXPORT_BUCKET:-relayq-exports}
+    TENANT_JOBS_PER_MIN: ${TENANT_JOBS_PER_MIN:-100}
+    WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
   depends_on:
     migrate: { condition: service_completed_successfully }
     redis: { condition: service_healthy }
@@ -62,6 +64,24 @@ services:
       - ./ops/grafana-provisioning:/etc/grafana/provisioning:ro
       - ./ops/grafana-dashboard.json:/var/lib/grafana/dashboards/relayq.json:ro
     ports: ["3001:3000"]
+
+  # Load test (Phase 6): docker compose --profile load run --rm k6
+  sink:
+    image: hashicorp/http-echo:1.0
+    command: ["-text=ok", "-listen=:5678"]
+    profiles: [load]
+
+  k6:
+    image: grafana/k6:0.54.0
+    command: ["run", "--summary-export=/load/summary.json", "/load/enqueue.k6.js"]
+    environment:
+      RELAYQ_URL: http://api:3000
+      RELAYQ_KEY: ${RELAYQ_KEY:-}
+      SINK_URL: http://sink:5678/
+      DURATION: ${DURATION:-5m}
+    volumes: ["./load:/load"]
+    depends_on: [api, sink]
+    profiles: [load]
 
 volumes:
   pgdata:

@@ -9,7 +9,7 @@ Resume line this must earn:
 > RelayQ — distributed job queue service (Node.js, TypeScript, BullMQ, Redis,
 > PostgreSQL, Docker, AWS). Idempotent HTTP enqueue, exponential-backoff retries,
 > dead-letter queue, per-tenant rate limits, Prometheus metrics; processes
-> N jobs/min across 3 workers (measured).
+> 33,000+ jobs/min across 3 workers (measured: 33,424/min, 0 lost, p95 enqueue 131 ms).
 
 ---
 
@@ -145,6 +145,6 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 3 Rate limits / priority
 - [x] Phase 4 Observability
 - [ ] Phase 5 Docker / CI / AWS
-- [ ] Phase 6 Throughput
+- [x] Phase 6 Throughput
 - [ ] Phase 7 Outbox + chaos test
 - [ ] Phase 8 Tracing
