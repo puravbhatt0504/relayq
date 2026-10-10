@@ -106,6 +106,34 @@ relayq/
 
 **Done:** record jobs/min completed and p95 enqueue latency in `README.md`; resume line uses the measured N, never a guessed one. Zero jobs lost: `count(JobRecord where status in (completed,dead)) == enqueued`.
 
+## Phase 7 — Exactly-once effects: transactional outbox + chaos test — the "advanced" upgrade
+
+Problem today: `POST /jobs` writes `JobRecord` to Postgres and adds to Redis as two separate steps. A crash between them loses a job or leaves a ghost record. And BullMQ is at-least-once, so a worker killed after the side effect but before ack runs it twice.
+
+- **Outbox (enqueue side):** `POST /jobs` does one Postgres transaction: insert `JobRecord(status:"pending")` + `Outbox{id, jobId, createdAt, publishedAt:null}`. Returns 202 only after commit. Redis is not touched in the request.
+- **Relay** `src/outbox/relay.ts`: loop `SELECT … FROM Outbox WHERE publishedAt IS NULL ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED`, add each to BullMQ with `jobId = JobRecord.id` (BullMQ dedupes on jobId, so re-publishing after a crash is harmless), then set `publishedAt`. Runs inside the api process; multiple instances safe via `SKIP LOCKED`.
+- **Idempotent effects (worker side):** `src/lib/effects.ts` `once(jobId, step, fn)` — inserts `EffectLog(jobId, step)` with a unique constraint *in the same transaction* as any DB write `fn` does; for external calls (SES, webhook), the key is passed downstream (`Idempotency-Key: {jobId}:{step}` header on webhooks, SES `MessageDeduplicationId` via a sent-log check). Second execution of a completed step → skipped, returns stored result.
+- Retention: delete published outbox rows older than 7 days (daily).
+
+Examples:
+- Process crash after commit, before relay → job is published on restart, runs once.
+- Worker `SIGKILL` after sending the email, before ack → BullMQ re-delivers; `once()` sees `EffectLog(job, "send")` and skips; exactly one email in MailHog.
+
+**Done — `chaos/` suite (`npm run chaos`, runs in CI nightly):**
+- Enqueue 10,000 `webhook.deliver` jobs to a sink that records `Idempotency-Key`s, while a script `docker kill`s a random worker every 3 s (and restarts it) and kills the api once mid-run.
+- Assert: every enqueued job reaches `completed`; sink received exactly 10,000 distinct keys (**0 lost, 0 duplicated effects**); outbox has 0 unpublished rows after drain.
+- Unit: `relay.test.ts` — two relays on the same table never publish a row twice; `effects.test.ts` — `once()` called twice runs `fn` once.
+
+Resume line gains: *"transactional outbox + idempotent effects; chaos-tested with random worker kills across 10k jobs: 0 lost, 0 duplicated."*
+
+## Phase 8 — Distributed tracing
+
+- OpenTelemetry SDK in `src/otel.ts` for api and worker; auto-instrument fastify, pg, ioredis.
+- `POST /jobs` extracts incoming `traceparent` (from PulseBoard) and stores it in job data; the worker starts its span as a child of it — so one trace spans HTTP → outbox → queue → worker → callback.
+- Jaeger in compose; ADOT → X-Ray in prod.
+
+**Done:** `otel.test.ts`: a job enqueued with `traceparent: 00-<T>-…` produces a worker span whose trace-id is `<T>`. In compose, PulseBoard's export shows as a single trace (see PulseBoard Phase 9).
+
 ---
 
 ## Out of scope
@@ -118,3 +146,5 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [ ] Phase 4 Observability
 - [ ] Phase 5 Docker / CI / AWS
 - [ ] Phase 6 Throughput
+- [ ] Phase 7 Outbox + chaos test
+- [ ] Phase 8 Tracing
