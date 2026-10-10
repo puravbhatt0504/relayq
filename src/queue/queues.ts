@@ -21,6 +21,14 @@ export const payloadSchemas = {
 export type JobType = keyof typeof payloadSchemas;
 export const jobTypes = Object.keys(payloadSchemas) as JobType[];
 
+/** What sits in a BullMQ job's data: the tenant rides along for per-tenant rate limiting. */
+export type JobData = { tenant: string; payload: unknown };
+
+/** Per-type ceilings, shared by every worker process (BullMQ keeps the limiter in Redis). */
+export const typeLimits: Partial<Record<JobType, { max: number; duration: number }>> = {
+  "email.digest": { max: 14, duration: 1000 }, // SES sandbox ceiling
+};
+
 // Retry policy is a Phase 2 concern; set here so every enqueue gets it.
 export const defaultJobOptions = {
   attempts: 5,

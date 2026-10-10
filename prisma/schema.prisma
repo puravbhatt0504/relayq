@@ -19,6 +19,7 @@ model JobRecord {
   type      String
   status    String   @default("queued") // queued|active|completed|failed|dead
   payload   Json
+  priority  Int      @default(5) // 1 high … 10 low
   attempts  Int      @default(0)
   result    Json?
   error     String?

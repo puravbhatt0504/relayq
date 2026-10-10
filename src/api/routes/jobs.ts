@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { claim, release } from "../../lib/idempotency.js";
-import { jobTypes, payloadSchemas, type JobType } from "../../queue/queues.js";
+import { jobTypes, payloadSchemas, type JobData, type JobType } from "../../queue/queues.js";
 import type { Deps } from "../server.js";
 
 const body = z.object({
@@ -11,18 +11,24 @@ const body = z.object({
   payload: z.unknown(),
   idempotencyKey: z.string().min(1).max(200).optional(),
   delayMs: z.number().int().nonnegative().optional(),
+  priority: z.number().int().min(1).max(10).default(5),
 });
+
+const MAX_QUEUED_PER_TENANT = 10_000;
 
 export function jobRoutes(app: FastifyInstance, { prisma, redis, queues }: Deps) {
   app.post("/jobs", async (req, reply) => {
     const b = body.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ errors: b.error.issues });
-    const { type, idempotencyKey, delayMs } = b.data;
+    const { type, idempotencyKey, delayMs, priority } = b.data;
     if (!jobTypes.includes(type as JobType)) {
       return reply.code(400).send({ errors: [{ path: ["type"], message: `must be one of ${jobTypes.join(", ")}` }] });
     }
     const p = payloadSchemas[type as JobType].safeParse(b.data.payload);
     if (!p.success) return reply.code(400).send({ errors: p.error.issues });
+
+    const backlog = await prisma.jobRecord.count({ where: { tenant: req.tenant, status: "queued" } });
+    if (backlog >= MAX_QUEUED_PER_TENANT) return reply.code(429).send({ error: `over ${MAX_QUEUED_PER_TENANT} queued jobs` });
 
     const jobId = randomUUID();
     if (idempotencyKey) {
@@ -30,8 +36,9 @@ export function jobRoutes(app: FastifyInstance, { prisma, redis, queues }: Deps)
       if (existing) return reply.code(200).send({ jobId: existing, status: "queued" });
     }
     try {
-      await prisma.jobRecord.create({ data: { id: jobId, tenant: req.tenant, type, payload: p.data as object } });
-      await queues[type as JobType].add(type, p.data, { jobId, delay: delayMs });
+      await prisma.jobRecord.create({ data: { id: jobId, tenant: req.tenant, type, priority, payload: p.data as object } });
+      const data: JobData = { tenant: req.tenant, payload: p.data };
+      await queues[type as JobType].add(type, data, { jobId, delay: delayMs, priority });
     } catch (err) {
       if (idempotencyKey) await release(redis, req.tenant, idempotencyKey);
       throw err;
@@ -57,7 +64,8 @@ export function jobRoutes(app: FastifyInstance, { prisma, redis, queues }: Deps)
     // Record first: a fast worker may mark it active before add() even returns.
     await prisma.jobRecord.update({ where: { id: rec.id }, data: { status: "queued", attempts: 0, error: null, result: Prisma.DbNull } });
     try {
-      await queue.add(rec.type, rec.payload, { jobId: rec.id });
+      const data: JobData = { tenant: rec.tenant, payload: rec.payload };
+      await queue.add(rec.type, data, { jobId: rec.id, priority: rec.priority });
     } catch (err) {
       await prisma.jobRecord.update({ where: { id: rec.id }, data: { status: "dead", error: rec.error } });
       throw err;

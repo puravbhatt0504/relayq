@@ -1,8 +1,8 @@
 import { Prisma, PrismaClient } from "@prisma/client";
-import { Worker, type ConnectionOptions, type Queue } from "bullmq";
+import { DelayedError, Worker, type Job, type Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { pathToFileURL } from "node:url";
-import { createQueues, jobTypes } from "../queue/queues.js";
+import { createQueues, jobTypes, typeLimits, type JobData } from "../queue/queues.js";
 import { boardExport } from "./handlers/board.export.js";
 import { emailDigest } from "./handlers/email.digest.js";
 import type { Handler, Handlers } from "./handlers/types.js";
@@ -14,18 +14,38 @@ export const defaultHandlers: Handlers = {
   "webhook.deliver": webhookDeliver,
 };
 
-type Opts = { connection: ConnectionOptions; prisma: PrismaClient; dead: Queue; handlers?: Handlers; concurrency?: number };
+type Limit = { max: number; windowMs: number };
+type Opts = {
+  connection: Redis; prisma: PrismaClient; dead: Queue;
+  handlers?: Handlers; concurrency?: number; tenantLimit?: Limit;
+};
 
-export function startWorkers({ connection, prisma, dead, handlers = defaultHandlers, concurrency }: Opts) {
+// Fixed window that opens on a tenant's first job; returns ms until it closes if over the limit, else 0.
+// ponytail: fixed window allows up to 2×max across a boundary, and every throttled job wakes at window end; sliding log / token bucket if that matters.
+const WINDOW_LUA = `
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+if n > tonumber(ARGV[2]) then return redis.call('PTTL', KEYS[1]) end
+return 0`;
+
+export function startWorkers({ connection, prisma, dead, handlers = defaultHandlers, concurrency, tenantLimit }: Opts) {
   concurrency ??= Number(process.env.WORKER_CONCURRENCY ?? 5);
+  const limit = tenantLimit ?? { max: Number(process.env.TENANT_JOBS_PER_MIN ?? 100), windowMs: 60_000 };
   const workers = jobTypes.map((type) => {
     const handle = handlers[type] as Handler<typeof type>;
-    return new Worker(type, async (job) => {
+    return new Worker(type, async (job: Job<JobData>, token) => {
       const id = job.id!;
+      const { tenant, payload } = job.data;
+      const wait = (await connection.eval(WINDOW_LUA, 1, `rl:tenant:${tenant}`, limit.windowMs, limit.max)) as number;
+      if (wait > 0) {
+        // Over the tenant's limit: park it until the window closes. Stays "queued"; no attempt used.
+        await job.moveToDelayed(Date.now() + wait, token);
+        throw new DelayedError();
+      }
       const attempts = job.attemptsMade + 1;
       await prisma.jobRecord.update({ where: { id }, data: { status: "active", attempts } });
       try {
-        const result = await handle(job.data, { jobId: id });
+        const result = await handle(payload as never, { jobId: id });
         await prisma.jobRecord.update({
           where: { id },
           data: { status: "completed", result: (result ?? Prisma.DbNull) as Prisma.InputJsonValue, error: null },
@@ -34,11 +54,11 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         const last = attempts >= (job.opts.attempts ?? 1);
-        if (last) await dead.add(type, { type, payload: job.data, error }, { jobId: id });
+        if (last) await dead.add(type, { type, tenant, payload, error }, { jobId: id });
         await prisma.jobRecord.update({ where: { id }, data: { status: last ? "dead" : "failed", error } });
         throw err;
       }
-    }, { connection, concurrency });
+    }, { connection, concurrency, limiter: typeLimits[type] });
   });
   // Worker.close() stops fetching new jobs and waits for active ones.
   return { workers, close: () => Promise.all(workers.map((w) => w.close())).then(() => {}) };

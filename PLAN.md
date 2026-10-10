@@ -76,7 +76,7 @@ relayq/
 
 ## Phase 3 — Rate limits and priorities
 
-- Per-tenant limit: BullMQ group/limiter, default 100 jobs/min per tenant; excess stays queued (not rejected).
+- Per-tenant limit: default 100 jobs/min per tenant (`TENANT_JOBS_PER_MIN`); excess stays queued (not rejected). BullMQ groups are Pro-only, so: Redis fixed-window counter checked in the worker, over-limit jobs `moveToDelayed` + `DelayedError` (no attempt used).
 - Per-type limit: `email.digest` ≤ 14/s (SES sandbox ceiling).
 - `priority` field (1 high … 10 low) on POST; default 5.
 - Enqueue-side cap: > 10,000 queued jobs for one tenant → `429`.
@@ -142,7 +142,7 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 ## Status
 - [x] Phase 1 Enqueue API
 - [x] Phase 2 Workers / retries / DLQ
-- [ ] Phase 3 Rate limits / priority
+- [x] Phase 3 Rate limits / priority
 - [ ] Phase 4 Observability
 - [ ] Phase 5 Docker / CI / AWS
 - [ ] Phase 6 Throughput
