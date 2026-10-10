@@ -27,6 +27,18 @@ Tests (need Docker for Testcontainers): `npm test`.
 
 Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body).
 
+## Deploy
+
+**Free demo (Render + Neon):** `render.yaml` runs api + relay + workers in one service (`dist/all.js`) with `DEMO=1`, which serves a public page at `/demo`. Free web services sleep after 15 min idle and wake on the next request (~1 min).
+
+**AWS (`infra/`, CDK, ap-south-1):** ECS Fargate api + workers (1–3, autoscaled on queue depth), RDS Postgres, ElastiCache Redis, S3, ALB behind CloudFront (HTTPS). No NAT gateway. Runs for a fixed window: the `RelayQReaper` stack deletes the app stack at `DESTROY_AT` (EventBridge Scheduler, runs in AWS) and emails at 80% / 100% of a $25 budget.
+
+```bash
+cd infra && npm ci
+DESTROY_AT=2026-10-15T05:44:00Z ALERT_EMAIL=you@example.com npx cdk deploy --all
+npx cdk destroy RelayQ   # tear down early
+```
+
 ## Throughput (measured)
 
 `docker compose --profile load run --rm k6`: 50 VUs enqueue `webhook.deliver` jobs to a local sink for 5 minutes, 3 workers.

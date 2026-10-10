@@ -1,0 +1,34 @@
+# Free demo: one web service running api + relay + workers (dist/all.js). It sleeps after 15 min
+# without traffic and wakes on the next request (~1 min). Postgres is Neon (free, scales to zero):
+# paste its connection string as DATABASE_URL when Render asks.
+services:
+  - type: web
+    name: relayq-demo
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    dockerCommand: sh -c "node_modules/.bin/prisma migrate deploy && exec node dist/all.js"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: relayq-redis, property: connectionString }
+      - key: DEMO
+        value: "1"
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_USER
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: TENANT_JOBS_PER_MIN
+        value: "100"
+
+  # In-memory only on the free plan: a restart drops queued BullMQ jobs (their JobRecords stay in Postgres).
+  - type: keyvalue
+    name: relayq-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # internal connections only

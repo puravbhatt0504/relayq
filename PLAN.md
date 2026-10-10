@@ -96,9 +96,10 @@ relayq/
 
 - `docker-compose.yml`: `api`, `worker` (×3 via `deploy.replicas`), `redis`, `postgres`, `mailhog`, `prometheus`, `grafana`.
 - CI: lint, typecheck, tests (Testcontainers), build images.
-- AWS: two ECS services (`relayq-api`, `relayq-worker` with autoscaling on `relayq_queue_depth`), ElastiCache, RDS, SES, S3. Secrets in SSM.
+- AWS (`infra/`, CDK, ap-south-1): two ECS Fargate services (api, worker 1–3 autoscaled on a `RelayQ/QueueDepth` CloudWatch metric the api emits as EMF), ElastiCache, RDS, SES, S3, ALB behind CloudFront for HTTPS. No NAT. Secrets in Secrets Manager (CloudFormation can't create SSM SecureStrings).
+- **Budget constraint (AWS Free plan, credits only):** AWS runs for a fixed window, not permanently. `RelayQReaper` stack: one-time EventBridge Scheduler `DeleteStack` at `DESTROY_AT` (default +5 days) + $25 cost-budget email alert. Always-on public demo instead runs free on Render (web service sleeps when idle, wakes on request) + Neon Postgres + Render Key Value: `render.yaml`, `src/all.ts`, public `/demo` page.
 
-**Done:** CI green on `main`; `curl https://<prod>/health` → `200 {"redis":"ok","db":"ok"}`; PulseBoard's `POST /boards/:id/export` produces a downloadable S3 file end-to-end in prod.
+**Done:** CI green on `main`; `curl https://<prod>/health` → `200 {"redis":"ok","db":"ok"}` on the AWS CloudFront URL while the window is open; demo run on AWS completes 100/100 jobs; Render demo URL wakes from sleep and completes a demo run. ~~PulseBoard export end-to-end in prod~~ deferred until PulseBoard's own deploy exists (needs its service-auth board fetch + callback route).
 
 ## Phase 6 — Throughput number (the resume number)
 
