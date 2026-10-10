@@ -6,24 +6,31 @@
     "dev": "tsx watch src/api/server.ts",
     "start": "node dist/api/server.js",
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "worker": "node dist/worker/index.js",
+    "dev:worker": "tsx watch src/worker/index.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "@aws-sdk/client-sesv2": "^3.1149.0",
+    "@aws-sdk/s3-request-presigner": "^3.1149.0",
     "@prisma/client": "^6.19.3",
     "bullmq": "^5.81.5",
     "fastify": "^4.29.1",
     "ioredis": "^5.11.1",
+    "nodemailer": "^7.0.13",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^10.28.0",
     "@testcontainers/redis": "^10.28.0",
     "@types/node": "^20.19.43",
+    "@types/nodemailer": "^8.0.2",
     "prisma": "^6.19.3",
     "testcontainers": "^10.28.0",
     "tsx": "^4.23.15",

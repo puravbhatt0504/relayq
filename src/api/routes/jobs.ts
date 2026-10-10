@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { claim, release } from "../../lib/idempotency.js";
@@ -43,5 +44,24 @@ export function jobRoutes(app: FastifyInstance, { prisma, redis, queues }: Deps)
     if (!job) return reply.code(404).send({ error: "not found" });
     const { id, type, status, attempts, result, error } = job;
     return { id, type, status, attempts, result: result ?? undefined, error: error ?? undefined };
+  });
+
+  // Re-queues a dead job under the same id with a fresh attempt count.
+  app.post<{ Params: { id: string } }>("/jobs/:id/retry", async (req, reply) => {
+    const rec = await prisma.jobRecord.findFirst({ where: { id: req.params.id, tenant: req.tenant } });
+    if (!rec) return reply.code(404).send({ error: "not found" });
+    if (rec.status !== "dead") return reply.code(409).send({ error: "only dead jobs can be retried" });
+    const queue = queues[rec.type as JobType];
+    // BullMQ ignores add() for an id that still exists, so drop the old failed copy first.
+    await Promise.all([queue.remove(rec.id), queues.dead.remove(rec.id)]);
+    // Record first: a fast worker may mark it active before add() even returns.
+    await prisma.jobRecord.update({ where: { id: rec.id }, data: { status: "queued", attempts: 0, error: null, result: Prisma.DbNull } });
+    try {
+      await queue.add(rec.type, rec.payload, { jobId: rec.id });
+    } catch (err) {
+      await prisma.jobRecord.update({ where: { id: rec.id }, data: { status: "dead", error: rec.error } });
+      throw err;
+    }
+    return reply.code(202).send({ jobId: rec.id, status: "queued" });
   });
 }

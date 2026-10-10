@@ -30,9 +30,10 @@ export const defaultJobOptions = {
 };
 
 // One BullMQ queue per job type, so per-type limiters (Phase 3) are plain queue limiters.
-export function createQueues(connection: ConnectionOptions) {
+// `dead` holds jobs that exhausted their attempts; nothing consumes it.
+export function createQueues(connection: ConnectionOptions, jobOptions = defaultJobOptions) {
   return Object.fromEntries(
-    jobTypes.map((t) => [t, new Queue(t, { connection, defaultJobOptions })]),
-  ) as Record<JobType, Queue>;
+    [...jobTypes, "dead"].map((t) => [t, new Queue(t, { connection, defaultJobOptions: jobOptions })]),
+  ) as Record<JobType | "dead", Queue>;
 }
 export type Queues = ReturnType<typeof createQueues>;

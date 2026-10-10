@@ -141,7 +141,7 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 
 ## Status
 - [x] Phase 1 Enqueue API
-- [ ] Phase 2 Workers / retries / DLQ
+- [x] Phase 2 Workers / retries / DLQ
 - [ ] Phase 3 Rate limits / priority
 - [ ] Phase 4 Observability
 - [ ] Phase 5 Docker / CI / AWS
