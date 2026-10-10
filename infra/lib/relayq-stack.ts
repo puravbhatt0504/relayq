@@ -1,7 +1,5 @@
 import * as cdk from "aws-cdk-lib";
 import * as appscaling from "aws-cdk-lib/aws-applicationautoscaling";
-import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
-import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -16,7 +14,6 @@ import type { Construct } from "constructs";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const CLOUDFRONT_ORIGIN_FACING = "pl-9aa247f3"; // com.amazonaws.global.cloudfront.origin-facing, ap-south-1
 
 /**
  * RelayQ on ECS Fargate, sized for a short-lived demo: no NAT gateway (tasks get public IPs in
@@ -103,11 +100,13 @@ export class RelayQStack extends cdk.Stack {
       role.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ["ses:SendEmail", "ses:SendRawEmail"], resources: ["*"] }));
     };
 
-    // API (+ outbox relay + public demo) behind an ALB that only CloudFront can reach.
+    // API (+ outbox relay + public demo) behind a public ALB.
+    // ponytail: plain HTTP. CloudFront (free HTTPS on *.cloudfront.net) is blocked until AWS verifies the
+    // account; once it is, front the ALB with a Distribution and restrict the ALB SG to the
+    // com.amazonaws.global.cloudfront.origin-facing prefix list (pl-9aa247f3 in ap-south-1).
     const api = new patterns.ApplicationLoadBalancedFargateService(this, "Api", {
       cluster, cpu: 256, memoryLimitMiB: 512, desiredCount: 1, minHealthyPercent: 100,
       assignPublicIp: true, taskSubnets: { subnetType: ec2.SubnetType.PUBLIC }, securityGroups: [tasksSg],
-      openListener: false,
       taskImageOptions: {
         image, containerPort: 3000,
         command: ["sh", "-c", `export DATABASE_URL="${dbUrl}" && node_modules/.bin/prisma migrate deploy && exec node dist/api/server.js`],
@@ -117,30 +116,13 @@ export class RelayQStack extends cdk.Stack {
       },
       circuitBreaker: { rollback: true },
     });
-    api.loadBalancer.connections.allowFrom(ec2.Peer.prefixList(CLOUDFRONT_ORIGIN_FACING), ec2.Port.tcp(80));
     api.targetGroup.configureHealthCheck({ path: "/health", healthyHttpCodes: "200" });
     api.targetGroup.setAttribute("deregistration_delay.timeout_seconds", "10");
     grantAppPermissions(api.taskDefinition.taskRole);
 
-    // HTTPS on the default *.cloudfront.net domain; nothing cached, Authorization forwarded.
-    const noCache = new cloudfront.CachePolicy(this, "NoCache", {
-      defaultTtl: cdk.Duration.seconds(0), minTtl: cdk.Duration.seconds(0), maxTtl: cdk.Duration.seconds(1),
-      headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
-      queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
-      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
-    });
-    const cdn = new cloudfront.Distribution(this, "Cdn", {
-      defaultBehavior: {
-        origin: new origins.LoadBalancerV2Origin(api.loadBalancer, { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        cachePolicy: noCache,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      },
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_200, // includes India edge locations
-    });
-    // Demo jobs run in worker tasks, which reach the api's sink through CloudFront like any client.
-    api.taskDefinition.defaultContainer!.addEnvironment("DEMO_SINK_URL", `https://${cdn.distributionDomainName}/demo/sink`);
+    // Demo jobs run in worker tasks, which reach the api's sink through the ALB like any client.
+    const url = `http://${api.loadBalancer.loadBalancerDnsName}`;
+    api.taskDefinition.defaultContainer!.addEnvironment("DEMO_SINK_URL", `${url}/demo/sink`);
 
     // Workers: 1 to 3 tasks, scaled on the QueueDepth metric the api emits every 30 s.
     const workerTask = new ecs.FargateTaskDefinition(this, "WorkerTask", { cpu: 256, memoryLimitMiB: 512 });
@@ -165,7 +147,7 @@ export class RelayQStack extends cdk.Stack {
       cooldown: cdk.Duration.seconds(60),
     });
 
-    new cdk.CfnOutput(this, "Url", { value: `https://${cdn.distributionDomainName}` });
+    new cdk.CfnOutput(this, "Url", { value: url });
     new cdk.CfnOutput(this, "AdminPasswordSecret", { value: adminSecret.secretName });
     new cdk.CfnOutput(this, "ClusterName", { value: cluster.clusterName });
   }
