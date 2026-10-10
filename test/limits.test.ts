@@ -61,6 +61,7 @@ describe("priority", () => {
     const p5 = [];
     for (let i = 0; i < 50; i++) p5.push((await env.post(hook())).json().jobId);
     const { jobId: p1 } = (await env.post(hook(1))).json();
+    await env.drained();
 
     starts.length = 0;
     const w = workersWith({ concurrency: 1, tenantLimit: { max: 1000, windowMs: 1000 } });

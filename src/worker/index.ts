@@ -4,6 +4,7 @@ import { Redis } from "ioredis";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { pino } from "pino";
+import { once } from "../lib/effects.js";
 import { jobDuration, jobsTotal, registry } from "../lib/metrics.js";
 import { createQueues, jobTypes, typeLimits, type JobData } from "../queue/queues.js";
 import { boardExport } from "./handlers/board.export.js";
@@ -38,7 +39,7 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
   const limit = tenantLimit ?? { max: Number(process.env.TENANT_JOBS_PER_MIN ?? 100), windowMs: 60_000 };
   const workers = jobTypes.map((type) => {
     const handle = handlers[type] as Handler<typeof type>;
-    return new Worker(type, async (job: Job<JobData>, token) => {
+    const worker = new Worker(type, async (job: Job<JobData>, token) => {
       const id = job.id!;
       const { tenant, payload } = job.data;
       const wait = (await connection.eval(WINDOW_LUA, 1, `rl:tenant:${tenant}`, limit.windowMs, limit.max)) as number;
@@ -49,11 +50,19 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
       }
       const attempts = job.attemptsMade + 1;
       const log = logger.child({ jobId: id, type, tenant, attempt: attempts });
-      await prisma.jobRecord.update({ where: { id }, data: { status: "active", attempts } });
+      // A finished record means this is a stale re-delivery (e.g. outbox re-published after a crash).
+      const { count } = await prisma.jobRecord.updateMany({
+        where: { id, status: { notIn: ["completed", "dead"] } },
+        data: { status: "active", attempts },
+      });
+      if (count === 0) {
+        log.warn("job already finished, skipping re-delivery");
+        return null;
+      }
       log.info("job started");
       const timer = jobDuration.startTimer({ type });
       try {
-        const result = await handle(payload as never, { jobId: id });
+        const result = await handle(payload as never, { jobId: id, once: (step, fn) => once(prisma, id, step, fn) });
         timer();
         await prisma.jobRecord.update({
           where: { id },
@@ -72,7 +81,21 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
         log[last ? "error" : "warn"]({ err: error }, last ? "job dead" : "job failed, will retry");
         throw err;
       }
-    }, { connection, concurrency, limiter: typeLimits[type] });
+    }, {
+      connection, concurrency, limiter: typeLimits[type],
+      // A killed worker leaves its jobs stalled; they're re-delivered (once() keeps effects single).
+      // Default 1 would fail a job hit by two kills, so allow more.
+      maxStalledCount: 10,
+    });
+    // Stall-exhausted jobs fail without entering the processor's catch; settle their record here.
+    worker.on("failed", async (job, err) => {
+      if (!job?.id || !/stalled/i.test(err.message)) return;
+      const { tenant, payload } = job.data;
+      await dead.add(type, { type, tenant, payload, error: err.message }, { jobId: job.id });
+      await prisma.jobRecord.update({ where: { id: job.id }, data: { status: "dead", error: err.message } });
+      jobsTotal.inc({ type, status: "dead" });
+    });
+    return worker;
   });
   // Worker.close() stops fetching new jobs and waits for active ones.
   return { workers, close: () => Promise.all(workers.map((w) => w.close())).then(() => {}) };

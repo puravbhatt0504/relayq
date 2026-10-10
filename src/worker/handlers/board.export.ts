@@ -11,8 +11,8 @@ const cell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` :
 export const toCsv = (b: Board) =>
   ["column,card_id,card_title", ...b.columns.flatMap((c) => c.cards.map((k) => [c.title, k.id, k.title].map(cell).join(",")))].join("\n");
 
-// Retries redo every step; the S3 key is per job, so a re-run overwrites rather than duplicates.
-export const boardExport: Handler<"board.export"> = async ({ boardId, format, callbackUrl }, { jobId }) => {
+// Fetch + upload are safe to repeat (the S3 key is per job, so a re-run overwrites); the callback is once().
+export const boardExport: Handler<"board.export"> = async ({ boardId, format, callbackUrl }, { jobId, once }) => {
   const res = await fetch(`${process.env.PULSEBOARD_URL}/boards/${encodeURIComponent(boardId)}`, {
     headers: { authorization: `Bearer ${process.env.PULSEBOARD_TOKEN ?? ""}` },
     signal: AbortSignal.timeout(10_000),
@@ -29,6 +29,8 @@ export const boardExport: Handler<"board.export"> = async ({ boardId, format, ca
   }));
   // ponytail: presigned URL dies with the signing credentials (hours on an ECS task role); proxy downloads if users need longer links.
   const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket, Key }), { expiresIn: 7 * 86400 });
-  await signedPost(callbackUrl, { jobId, url });
-  return { key: Key, url };
+  return once("callback", async () => {
+    await signedPost(callbackUrl, { jobId, url }, `${jobId}:callback`);
+    return { key: Key, url };
+  });
 };

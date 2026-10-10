@@ -83,5 +83,13 @@ services:
     depends_on: [api, sink]
     profiles: [load]
 
+  # Chaos suite (Phase 7): npm run chaos
+  chaos-sink:
+    image: node:20-alpine
+    command: ["node", "/chaos/sink.mjs"]
+    volumes: ["./chaos:/chaos:ro"]
+    ports: ["5679:5679"]
+    profiles: [chaos]
+
 volumes:
   pgdata:

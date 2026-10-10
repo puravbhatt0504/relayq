@@ -119,7 +119,7 @@ Examples:
 - Process crash after commit, before relay → job is published on restart, runs once.
 - Worker `SIGKILL` after sending the email, before ack → BullMQ re-delivers; `once()` sees `EffectLog(job, "send")` and skips; exactly one email in MailHog.
 
-**Done — `chaos/` suite (`npm run chaos`, runs in CI nightly):**
+**Done — `chaos/` suite (`npm run chaos`; CI workflow is manual-trigger to save Actions minutes):**
 - Enqueue 10,000 `webhook.deliver` jobs to a sink that records `Idempotency-Key`s, while a script `docker kill`s a random worker every 3 s (and restarts it) and kills the api once mid-run.
 - Assert: every enqueued job reaches `completed`; sink received exactly 10,000 distinct keys (**0 lost, 0 duplicated effects**); outbox has 0 unpublished rows after drain.
 - Unit: `relay.test.ts` — two relays on the same table never publish a row twice; `effects.test.ts` — `once()` called twice runs `fn` once.
@@ -146,5 +146,5 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 4 Observability
 - [ ] Phase 5 Docker / CI / AWS
 - [x] Phase 6 Throughput
-- [ ] Phase 7 Outbox + chaos test
+- [x] Phase 7 Outbox + chaos test
 - [ ] Phase 8 Tracing

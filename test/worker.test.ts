@@ -14,7 +14,7 @@ const digest = { type: "email.digest", payload: { to: "a@b.co", userName: "Ann",
 
 beforeAll(async () => {
   // Same 5 attempts as prod; backoff base shrunk from 2s so the suite runs in seconds.
-  env = await startEnv({ ...defaultJobOptions, backoff: { type: "exponential", delay: 20 } });
+  env = await startEnv({ jobOptions: { ...defaultJobOptions, backoff: { type: "exponential", delay: 20 } } });
   workers = startWorkers({
     connection: env.connection,
     prisma: env.prisma,

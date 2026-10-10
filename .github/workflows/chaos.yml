@@ -1,0 +1,18 @@
+name: chaos
+on:
+  # Manual only: a nightly cron would spend GitHub Actions minutes every day. Re-add
+  # `schedule: [{ cron: "0 3 * * *" }]` if the repo is public (free minutes) or the budget allows.
+  workflow_dispatch:
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run chaos
+      - if: always()
+        run: docker compose logs --tail 200 api worker

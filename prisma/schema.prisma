@@ -14,17 +14,40 @@ model ApiKey {
 }
 
 model JobRecord {
-  id        String   @id
-  tenant    String
-  type      String
-  status    String   @default("queued") // queued|active|completed|failed|dead
-  payload   Json
-  priority  Int      @default(5) // 1 high … 10 low
-  attempts  Int      @default(0)
-  result    Json?
-  error     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id
+  tenant         String
+  type           String
+  status         String   @default("pending") // pending (in outbox)|queued|active|completed|failed|dead
+  payload        Json
+  priority       Int      @default(5) // 1 high … 10 low
+  idempotencyKey String?
+  attempts       Int      @default(0)
+  result         Json?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
+  @@unique([tenant, idempotencyKey])
   @@index([tenant, status])
+}
+
+/// Written in the same transaction as its JobRecord; the relay publishes it to BullMQ.
+model Outbox {
+  id          BigInt    @id @default(autoincrement())
+  jobId       String    @unique
+  delayMs     Int?
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt, id])
+}
+
+/// One row per completed side-effect step; a re-delivered job skips steps already here.
+model EffectLog {
+  jobId     String
+  step      String
+  result    Json?
+  createdAt DateTime @default(now())
+
+  @@id([jobId, step])
 }

@@ -18,12 +18,15 @@ export function renderDigest(userName: string, items: { title: string; url?: str
   return `<p>Hi ${esc(userName)},</p><p>Here's what happened:</p><ul>${li.join("")}</ul>`;
 }
 
-export const emailDigest: Handler<"email.digest"> = async ({ to, userName, items }) => {
-  const info = await getTransport().sendMail({
-    from: process.env.MAIL_FROM ?? "relayq@localhost",
-    to,
-    subject: `Your digest: ${items.length} update${items.length === 1 ? "" : "s"}`,
-    html: renderDigest(userName, items),
+// SES has no idempotency key, so the sent-log in once() is the only guard: a crash between the
+// send and its EffectLog commit can still send twice. That window is milliseconds; it isn't zero.
+export const emailDigest: Handler<"email.digest"> = async ({ to, userName, items }, { once }) =>
+  once("send", async () => {
+    const info = await getTransport().sendMail({
+      from: process.env.MAIL_FROM ?? "relayq@localhost",
+      to,
+      subject: `Your digest: ${items.length} update${items.length === 1 ? "" : "s"}`,
+      html: renderDigest(userName, items),
+    });
+    return { messageId: info.messageId };
   });
-  return { messageId: info.messageId };
-};

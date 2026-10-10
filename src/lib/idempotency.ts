@@ -1,15 +1,19 @@
-import type { Redis } from "ioredis";
+import { Prisma } from "@prisma/client";
 
-const TTL_SECONDS = 86400;
-const key = (tenant: string, idemKey: string) => `idem:${tenant}:${idemKey}`;
+const TTL_MS = 24 * 60 * 60 * 1000;
 
-/** Claims the key for `jobId`. Returns null if claimed, or the jobId that already owns it. */
-export async function claim(redis: Redis, tenant: string, idemKey: string, jobId: string) {
-  const ok = await redis.set(key(tenant, idemKey), jobId, "EX", TTL_SECONDS, "NX");
-  return ok ? null : await redis.get(key(tenant, idemKey));
+/**
+ * Inside the enqueue transaction: returns the id of this tenant's job with the same key from the
+ * last 24 h, or null. A stale holder has its key cleared so the unique (tenant, key) slot frees up.
+ */
+export async function reuse(tx: Prisma.TransactionClient, tenant: string, idempotencyKey: string) {
+  const prev = await tx.jobRecord.findUnique({ where: { tenant_idempotencyKey: { tenant, idempotencyKey } } });
+  if (!prev) return null;
+  if (Date.now() - prev.createdAt.getTime() < TTL_MS) return prev.id;
+  await tx.jobRecord.update({ where: { id: prev.id }, data: { idempotencyKey: null } });
+  return null;
 }
 
-/** Frees a claim when the enqueue that made it failed, so a client retry isn't stuck. */
-export async function release(redis: Redis, tenant: string, idemKey: string) {
-  await redis.del(key(tenant, idemKey));
-}
+/** Two concurrent first requests with one key: the loser's insert hits the unique index. */
+export const isDuplicateKey = (err: unknown) =>
+  err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";

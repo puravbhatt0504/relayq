@@ -13,7 +13,8 @@
     "dev:worker": "tsx watch src/worker/index.ts",
     "lint": "eslint .",
     "key": "node dist/cli/create-key.js",
-    "migrate": "prisma migrate deploy"
+    "migrate": "prisma migrate deploy",
+    "chaos": "tsx chaos/run.ts"
   },
   "engines": {
     "node": ">=20"

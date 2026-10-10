@@ -7,6 +7,7 @@ import { Redis } from "ioredis";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { registerQueueDepth, registry } from "../lib/metrics.js";
+import { cleanupOutbox, startRelay } from "../outbox/relay.js";
 import { createQueues, type Queues } from "../queue/queues.js";
 import { authHook } from "./auth.js";
 import { jobRoutes } from "./routes/jobs.js";
@@ -61,5 +62,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     redis: new Redis(redisUrl),
     queues: createQueues(new Redis(redisUrl, { maxRetriesPerRequest: null })),
   };
-  await buildApp(deps).listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+  const app = buildApp(deps);
+  await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+  // Outbox relay lives in the api process; several api instances are safe (SKIP LOCKED).
+  startRelay(deps.prisma, deps.queues, { onError: (err) => app.log.error({ err }, "outbox relay failed") });
+  setInterval(() => cleanupOutbox(deps.prisma).catch((err) => app.log.error({ err }, "outbox cleanup failed")), 86_400_000).unref();
 }

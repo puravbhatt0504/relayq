@@ -5,13 +5,14 @@ import { Redis } from "ioredis";
 import { execSync } from "node:child_process";
 import { hashKey } from "../src/api/auth.js";
 import { buildApp } from "../src/api/server.js";
+import { startRelay } from "../src/outbox/relay.js";
 import { createQueues, defaultJobOptions } from "../src/queue/queues.js";
 
 export const KEY_A = "rq_tenantA_secret";
 export const KEY_B = "rq_tenantB_secret";
 
-/** Real Postgres + Redis, schema pushed, tenants A and B seeded, app built. */
-export async function startEnv(jobOptions = defaultJobOptions) {
+/** Real Postgres + Redis, migrated, tenants A and B seeded, app built, outbox relay running (unless relay: false). */
+export async function startEnv({ jobOptions = defaultJobOptions, relay = true } = {}) {
   const [pg, rc] = await Promise.all([
     new PostgreSqlContainer("postgres:16-alpine").start(),
     new RedisContainer("redis:7-alpine").start(),
@@ -24,13 +25,18 @@ export async function startEnv(jobOptions = defaultJobOptions) {
   const connection = new Redis(rc.getConnectionUrl(), { maxRetriesPerRequest: null });
   const queues = createQueues(connection, jobOptions);
   const app = buildApp({ prisma, redis, queues });
+  const stopRelay = relay ? startRelay(prisma, queues, { intervalMs: 20 }) : async () => {};
 
   const auth = (key: string) => ({ authorization: `Bearer ${key}` });
   const post = (body: unknown, key = KEY_A) => app.inject({ method: "POST", url: "/jobs", headers: auth(key), payload: body as object });
   const retry = (id: string, key = KEY_A) => app.inject({ method: "POST", url: `/jobs/${id}/retry`, headers: auth(key) });
   const get = (path: string, key = KEY_A) => app.inject({ url: path, headers: auth(key) });
 
+  /** Resolves once the relay has published everything committed so far. */
+  const drained = () => waitFor(async () => (await prisma.outbox.count({ where: { publishedAt: null } })) === 0);
+
   async function stop() {
+    await stopRelay();
     await app.close();
     await Promise.all(Object.values(queues).map((q) => q.close()));
     redis.disconnect();
@@ -38,7 +44,7 @@ export async function startEnv(jobOptions = defaultJobOptions) {
     await prisma.$disconnect();
     await Promise.all([pg.stop(), rc.stop()]);
   }
-  return { prisma, redis, connection, queues, app, post, retry, get, stop };
+  return { prisma, redis, connection, queues, app, post, retry, get, drained, stop };
 }
 
 export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms = 20_000): Promise<T> {
