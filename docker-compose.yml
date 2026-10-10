@@ -1,0 +1,67 @@
+x-app: &app
+  build: .
+  image: relayq:local
+  environment: &env
+    DATABASE_URL: postgresql://relayq:relayq@postgres:5432/relayq
+    REDIS_URL: redis://redis:6379
+    SMTP_URL: smtp://mailhog:1025
+    MAIL_FROM: relayq@localhost
+    WEBHOOK_SECRET: ${WEBHOOK_SECRET:-local-dev-secret}
+    ADMIN_USER: ${ADMIN_USER:-admin}
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+    PULSEBOARD_URL: ${PULSEBOARD_URL:-http://host.docker.internal:4000}
+    PULSEBOARD_TOKEN: ${PULSEBOARD_TOKEN:-}
+    EXPORT_BUCKET: ${EXPORT_BUCKET:-relayq-exports}
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+    redis: { condition: service_healthy }
+
+services:
+  migrate:
+    image: relayq:local
+    build: .
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment: *env
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *app
+    ports: ["3000:3000"]
+
+  worker:
+    <<: *app
+    command: ["node", "dist/worker/index.js"]
+    deploy: { replicas: 3 }
+    stop_grace_period: 35s # worker drains for up to 30s on SIGTERM
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory-policy", "noeviction"] # BullMQ requirement
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, retries: 15 }
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: relayq, POSTGRES_PASSWORD: relayq, POSTGRES_DB: relayq }
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "relayq"], interval: 2s, retries: 15 }
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports: ["8025:8025"]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes: ["./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment: { GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer }
+    volumes:
+      - ./ops/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana-dashboard.json:/var/lib/grafana/dashboards/relayq.json:ro
+    ports: ["3001:3000"]
+
+volumes:
+  pgdata:

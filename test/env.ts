@@ -17,7 +17,7 @@ export async function startEnv(jobOptions = defaultJobOptions) {
     new RedisContainer("redis:7-alpine").start(),
   ]);
   const dbUrl = pg.getConnectionUri();
-  execSync("npx prisma db push --skip-generate", { env: { ...process.env, DATABASE_URL: dbUrl }, stdio: "ignore" });
+  execSync("npx prisma migrate deploy",{ env: { ...process.env, DATABASE_URL: dbUrl }, stdio: "ignore" });
   const prisma = new PrismaClient({ datasourceUrl: dbUrl });
   await prisma.apiKey.createMany({ data: [{ hash: hashKey(KEY_A), tenant: "A" }, { hash: hashKey(KEY_B), tenant: "B" }] });
   const redis = new Redis(rc.getConnectionUrl());

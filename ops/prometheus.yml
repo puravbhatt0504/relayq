@@ -1,0 +1,7 @@
+global: { scrape_interval: 5s }
+scrape_configs:
+  - job_name: relayq-api
+    static_configs: [{ targets: ["api:3000"] }]
+  # One DNS name, three replicas: A-record discovery scrapes each worker.
+  - job_name: relayq-worker
+    dns_sd_configs: [{ names: ["worker"], type: A, port: 9100 }]
