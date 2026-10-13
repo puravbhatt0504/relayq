@@ -11,7 +11,8 @@ import { createQueues, jobTypes, typeConcurrency, typeLimits, type JobData } fro
 import { boardExport } from "./handlers/board.export.js";
 import { emailDigest } from "./handlers/email.digest.js";
 import { embedBatch } from "./handlers/embed.batch.js";
-import { RetryLater, type Handler, type Handlers } from "./handlers/types.js";
+import { llmComplete } from "./handlers/llm.complete.js";
+import { Rejected, RetryLater, type Handler, type Handlers } from "./handlers/types.js";
 import { webhookDeliver } from "./handlers/webhook.deliver.js";
 
 const logger = pino({ name: "relayq-worker", enabled: process.env.NODE_ENV !== "test" });
@@ -21,6 +22,7 @@ export const defaultHandlers: Handlers = {
   "board.export": boardExport,
   "webhook.deliver": webhookDeliver,
   "embed.batch": embedBatch,
+  "llm.complete": llmComplete,
 };
 
 type Limit = { max: number; windowMs: number };
@@ -70,7 +72,7 @@ export function startWorkers({ connection, prisma, dead, handlers: overrides, co
         log.info("job started");
         const timer = jobDuration.startTimer({ type });
         try {
-          const result = await handle(payload as never, { jobId: id, tenant, once: (step, fn) => once(prisma, id, step, fn) });
+          const result = await handle(payload as never, { jobId: id, tenant, once: (step, fn) => once(prisma, id, step, fn), prisma, redis: connection });
           timer();
           await prisma.jobRecord.update({
             where: { id },
@@ -89,6 +91,13 @@ export function startWorkers({ connection, prisma, dead, handlers: overrides, co
             throw new DelayedError();
           }
           const error = err instanceof Error ? err.message : String(err);
+          if (err instanceof Rejected) {
+            // Refused by policy (budget): terminal, but a decision rather than a fault, so no dead letter.
+            await prisma.jobRecord.update({ where: { id }, data: { status: "failed", error } });
+            jobsTotal.inc({ type, status: "failed" });
+            log.warn({ err: error }, "job rejected");
+            throw err;
+          }
           // UnrecoverableError (bad request, missing config): BullMQ won't retry, so this is the last attempt.
           const last = err instanceof UnrecoverableError || attempts >= (job.opts.attempts ?? 1);
           if (last) await dead.add(type, { type, tenant, payload, error }, { jobId: id });

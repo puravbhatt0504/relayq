@@ -19,6 +19,28 @@ export const jobDuration = new Histogram({
   registers: [registry],
 });
 
+export const llmTokens = new Counter({
+  name: "relayq_llm_tokens_total",
+  help: "LLM tokens by model and kind (input, output, cache_write, cache_read)",
+  labelNames: ["model", "kind"] as const,
+  registers: [registry],
+});
+
+export const llmCost = new Counter({
+  name: "relayq_llm_cost_usd_total",
+  help: "LLM spend in USD, priced from src/llm/prices.ts",
+  labelNames: ["tenant", "model"] as const,
+  registers: [registry],
+});
+
+export const llmLatency = new Histogram({
+  name: "relayq_llm_latency_seconds",
+  help: "Provider call latency for the call that produced the result",
+  labelNames: ["model"] as const,
+  buckets: [0.5, 1, 2, 5, 10, 20, 30, 60],
+  registers: [registry],
+});
+
 /** Waiting + prioritized + delayed per queue, read from Redis at scrape time. Register in the API only. */
 export function registerQueueDepth(queues: Queues) {
   registry.removeSingleMetric("relayq_queue_depth");

@@ -52,3 +52,26 @@ model EffectLog {
 
   @@id([jobId, step])
 }
+
+/// Monthly LLM spend cap per tenant. No row = LLM_DEFAULT_MONTHLY_USD (default 0: LLM jobs are refused until a budget is set).
+model TenantBudget {
+  tenant          String  @id
+  monthlyUsdLimit Decimal @db.Decimal(12, 6)
+}
+
+/// One row per completed LLM call (the one that produced the result), priced from src/llm/prices.ts.
+model LlmUsage {
+  id               BigInt   @id @default(autoincrement())
+  jobId            String
+  tenant           String
+  model            String
+  inputTokens      Int
+  outputTokens     Int
+  cacheWriteTokens Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  costUsd          Decimal  @db.Decimal(12, 6)
+  latencyMs        Int
+  createdAt        DateTime @default(now())
+
+  @@index([tenant, createdAt])
+}

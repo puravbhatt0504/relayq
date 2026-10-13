@@ -65,7 +65,7 @@ export async function main() {
     queues: createQueues(new Redis(redisUrl, { maxRetriesPerRequest: null })),
   };
   const app = buildApp(deps, { demo: process.env.DEMO === "1" });
-  await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+  await app.listen({ port: Number(process.env.PORT ?? 3200), host: "0.0.0.0" });
   // Outbox relay lives in the api process; several api instances are safe (SKIP LOCKED).
   startRelay(deps.prisma, deps.queues, { onError: (err) => app.log.error({ err }, "outbox relay failed") });
   setInterval(() => cleanupOutbox(deps.prisma).catch((err) => app.log.error({ err }, "outbox cleanup failed")), 86_400_000).unref();

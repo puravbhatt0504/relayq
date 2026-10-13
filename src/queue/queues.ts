@@ -1,5 +1,8 @@
 import { Queue, type ConnectionOptions } from "bullmq";
 import { z } from "zod";
+import { llmModels, type LlmModel } from "../llm/prices.js";
+
+const llmModel = z.enum(llmModels as [LlmModel, ...LlmModel[]]);
 
 export const payloadSchemas = {
   "email.digest": z.object({
@@ -20,6 +23,19 @@ export const payloadSchemas = {
   "embed.batch": z.object({
     items: z.array(z.object({ id: z.string().min(1), text: z.string().min(1).max(32_000) })).min(1).max(128),
     model: z.string().min(1).default("voyage-3.5"),
+    callbackUrl: z.string().url(),
+  }),
+  // Model must be in the price table: budgets and the cost ledger depend on it.
+  "llm.complete": z.object({
+    model: llmModel,
+    fallbackModel: llmModel.optional(),
+    system: z.string().default(""),
+    messages: z.array(z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.union([z.string().min(1), z.array(z.record(z.unknown())).min(1)]),
+    })).min(1),
+    tools: z.array(z.record(z.unknown())).optional(),
+    maxTokens: z.number().int().min(1).max(16_000), // non-streaming call with a 60 s timeout
     callbackUrl: z.string().url(),
   }),
 };

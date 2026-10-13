@@ -25,7 +25,7 @@ Tests (need Docker for Testcontainers): `npm test`.
 | `GET /metrics`, `GET /health` | Prometheus; `{redis, db}` |
 | `/admin/queues` | bull-board, basic auth (`ADMIN_USER` / `ADMIN_PASSWORD`) |
 
-Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body).
+Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body), `embed.batch` (Voyage, batched across jobs), `llm.complete` (Anthropic; per-tenant monthly budget, shared TPM limit, fallback model, cost ledger in `LlmUsage`).
 
 ## Deploy
 

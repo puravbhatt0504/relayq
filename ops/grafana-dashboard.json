@@ -3,39 +3,124 @@
   "uid": "relayq",
   "schemaVersion": 39,
   "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "type": "timeseries",
       "title": "Jobs finished / min by status",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum by (status) (rate(relayq_jobs_total[1m])) * 60", "legendFormat": "{{status}}" }]
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(relayq_jobs_total[1m])) * 60",
+          "legendFormat": "{{status}}"
+        }
+      ]
     },
     {
       "type": "timeseries",
       "title": "Queue depth",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "max by (queue) (relayq_queue_depth)", "legendFormat": "{{queue}}" }]
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (queue) (relayq_queue_depth)",
+          "legendFormat": "{{queue}}"
+        }
+      ]
     },
     {
       "type": "timeseries",
       "title": "Job duration p50 / p95 by type",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "targets": [
-        { "expr": "histogram_quantile(0.5, sum by (le, type) (rate(relayq_job_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{type}}" },
-        { "expr": "histogram_quantile(0.95, sum by (le, type) (rate(relayq_job_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{type}}" }
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, type) (rate(relayq_job_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{type}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, type) (rate(relayq_job_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{type}}"
+        }
       ]
     },
     {
       "type": "stat",
       "title": "Dead jobs (1h)",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(increase(relayq_jobs_total{status=\"dead\"}[1h]))" }]
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(relayq_jobs_total{status=\"dead\"}[1h]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM cost per tenant per day",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tenant) (increase(relayq_llm_cost_usd_total[1d]))",
+          "legendFormat": "{{tenant}}"
+        }
+      ]
     }
   ]
 }
