@@ -23,6 +23,8 @@ Tests (need Docker for Testcontainers): `npm test`.
 | `GET /jobs/:id` | `{id, type, status, attempts, result?, error?}` |
 | `POST /jobs/:id/retry` | re-queue a `dead` job |
 | `GET /models/:name` | promoted model version + version history (`ml.retrain` registry) |
+| `GET /llm/usage?month=YYYY-MM` | this tenant's LLM spend for the month, budget left, per-model tokens and cost |
+| `PUT /admin/budgets/:tenant {monthlyUsdLimit}`, `GET /admin/budgets` | set / list monthly LLM budgets (admin basic auth; no budget = LLM jobs refused) |
 | `GET /metrics`, `GET /health` | Prometheus; `{redis, db}` |
 | `/admin/queues` | bull-board, basic auth (`ADMIN_USER` / `ADMIN_PASSWORD`) |
 

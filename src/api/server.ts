@@ -12,6 +12,7 @@ import { createQueues, jobTypes, type Queues } from "../queue/queues.js";
 import { authHook } from "./auth.js";
 import { demoRoutes } from "./demo.js";
 import { jobRoutes } from "./routes/jobs.js";
+import { budgetAdminRoutes, llmUsageRoutes } from "./routes/llm.js";
 import { modelRoutes } from "./routes/models.js";
 
 export type Deps = { prisma: PrismaClient; redis: Redis; queues: Queues };
@@ -43,6 +44,7 @@ export function buildApp(deps: Deps, { demo = false } = {}) {
 
   app.register(async (admin) => {
     admin.addHook("onRequest", basicAuth());
+    budgetAdminRoutes(admin, deps);
     const board = new FastifyAdapter();
     board.setBasePath("/admin/queues");
     // `as never`: bull-board 5 (last Fastify-4 line) types predate bullmq's string job progress; runtime is fine.
@@ -54,6 +56,7 @@ export function buildApp(deps: Deps, { demo = false } = {}) {
     authed.addHook("preHandler", authHook(deps.prisma));
     jobRoutes(authed, deps);
     modelRoutes(authed, deps);
+    llmUsageRoutes(authed, deps);
   });
   if (demo) app.register(async (pub) => demoRoutes(pub, deps));
   return app;

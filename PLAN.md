@@ -193,6 +193,25 @@ Every tenant-supplied URL (`webhook.deliver.url`, every `callbackUrl`, `MODEL_SU
 - Sink answers `302 → http://169.254.169.254/` → not followed: the job retries and the sink saw no metadata request.
 - `ftp://example.com/x` → `blocked_url`.
 
+## Phase 13 — LLM budgets and usage over HTTP
+
+Today a budget can only be set with SQL, and tenants can't see what they've spent. New file `src/api/routes/llm.ts`:
+
+- `GET /llm/usage?month=YYYY-MM` (tenant bearer key; month defaults to the current UTC month) → `{month, limitUsd, spentUsd, remainingUsd, byModel: [{model, calls, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, costUsd}]}`.
+  - Spend comes from the `LlmUsage` ledger (settled cost only), only the caller's own rows.
+  - `limitUsd` is the `TenantBudget` row, else `LLM_DEFAULT_MONTHLY_USD` (0). `remainingUsd = max(0, limit − spent)`.
+  - `byModel` is sorted by cost, descending.
+  - Bad month (`2026-13`, `abc`) → 400.
+- `PUT /admin/budgets/:tenant {monthlyUsdLimit}` (admin basic auth) → upsert → `200 {tenant, monthlyUsdLimit}`. The limit must be a number with 0 ≤ x ≤ 1,000,000, else 400. It takes effect on the next reservation, because `reserveBudget` reads the row each time.
+- `GET /admin/budgets` (admin) → `[{tenant, monthlyUsdLimit}]`.
+
+**Done:** `llm-api.test.ts`:
+- Seed `LlmUsage` for tenant A: 2 sonnet rows ($0.30 + $0.20) and 1 haiku row ($0.05) this month, 1 sonnet row ($9) last month; 1 row for tenant B.
+- `GET /llm/usage` as A with a $1 budget → `spentUsd 0.55`, `remainingUsd 0.45`, byModel `[sonnet: 2 calls $0.50, haiku: 1 call $0.05]`.
+- `?month=<last month>` → `spentUsd 9`, `remainingUsd 0`. `?month=2026-13` → 400.
+- `PUT /admin/budgets/B {monthlyUsdLimit: 5}` without auth → 401; with auth → 200, and B's usage then shows `limitUsd 5`. Limit `-1` → 400.
+- No budget row and the env default unset → `limitUsd 0`.
+
 ---
 
 ## Out of scope
@@ -211,3 +230,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 10 llm.complete: budgets, fallback, cost (server-side refusal fallbacks skipped; Haiku 5.5 cache-read price assumed)
 - [x] Phase 11 ml.retrain + model registry (trainer runs via local `docker run`; ECS RunTask skipped. Verified against the real pulseboard-ml-eta image, 2026-10-13)
 - [x] Phase 12 SSRF guard on outbound calls
+- [x] Phase 13 LLM budgets and usage over HTTP
