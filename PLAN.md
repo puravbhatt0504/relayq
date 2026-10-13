@@ -137,6 +137,42 @@ Resume line gains: *"transactional outbox + idempotent effects; chaos-tested wit
 
 ---
 
+# AI infrastructure phases
+
+RelayQ becomes where AI work runs: batch embeddings, LLM calls with budgets and fallbacks, and ML retraining. Consumers: PulseBoard Phases 10–13.
+
+## Phase 9 — `embed.batch` job type
+
+- Payload `{tenant, items:[{id, text}], model:"voyage-3.5", callbackUrl}`; ≤ 128 items per job, else `400`.
+- Worker coalesces queued `embed.batch` jobs for the same tenant/model up to 128 items or 500 ms, makes one provider call, splits results back per job (fewer, larger requests).
+- Provider 429 → job delayed by `Retry-After` (not counted as a failed attempt); 5xx → normal backoff.
+- Result POSTed to `callbackUrl` as `{items:[{id, embedding:number[1024]}]}` with the HMAC signature header; exactly-once via Phase 7's `once()`.
+
+**Done:** `embed.test.ts` with a mock provider: 300 single-item jobs enqueued together → ≤ 4 provider calls and 300 correct callbacks; a 429 with `Retry-After: 2` delays ~2 s and leaves `attempts` unchanged; 129 items → 400.
+
+## Phase 10 — `llm.complete`: token budgets, fallback, cost tracking
+
+- Payload `{tenant, model, system, messages, tools?, maxTokens, fallbackModel?, callbackUrl}`.
+- **Budgets:** `TenantBudget{tenant, monthlyUsdLimit}`; before running, reserve estimated cost (input tokens counted via the provider's token-count API + `maxTokens`) in Redis; settle with actual usage after. Over budget → job `failed` with `error:"budget_exceeded"` (not retried) and a webhook to the tenant.
+- **Rate limits:** per-provider tokens-per-minute limiter (Redis token bucket) shared by all workers.
+- **Fallback:** primary returns 529/overloaded or times out (60 s) twice → retry once on `fallbackModel`; result records `modelUsed`.
+- **Cost ledger:** `LlmUsage{jobId, tenant, model, inputTokens, outputTokens, costUsd, latencyMs}`; prices in `src/llm/prices.ts` (one table, unit-tested).
+- Prompt caching: system prompts > 1,024 tokens sent with cache control; cache-read tokens recorded separately in the ledger.
+- Metrics: `relayq_llm_tokens_total{model,kind}`, `relayq_llm_cost_usd_total{tenant,model}`, `relayq_llm_latency_seconds`. Grafana panel "LLM cost per tenant per day".
+
+**Done:** `llm.test.ts` (mock provider): tenant with $0.01 left and a job estimated at $0.02 → `budget_exceeded`, no provider call; two overloaded responses → completes on fallback with `modelUsed = fallback`; ledger cost equals `prices.ts` × tokens to the cent; 20 concurrent jobs never exceed the TPM limit (assert from mock call timestamps).
+
+## Phase 11 — `ml.retrain` + model registry
+
+- Job type `ml.retrain {modelName:"eta", dataUrl}` runs the PulseBoard `ml/eta` training container as an ECS task (worker launches it with `RunTask` and polls; locally `docker run`).
+- Registry table `ModelVersion{name, version, s3Uri, metrics jsonb, status: candidate|promoted|rejected, createdAt}`.
+- Promotion rule: candidate's test MAE ≤ promoted MAE → promote (atomic swap of `status`) and POST `{name, version}` to subscribers so the predictor reloads; else `rejected` with reason.
+- `GET /models/:name` → current promoted version + metric history.
+
+**Done:** `retrain.test.ts` with a stub trainer: better MAE → promoted and subscriber notified once; worse MAE → `rejected`, promoted version unchanged; trainer crash → job retried per Phase 2, no half-promoted state (exactly one `promoted` row per name, asserted by a partial unique index).
+
+---
+
 ## Out of scope
 Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 
@@ -149,3 +185,6 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 6 Throughput
 - [x] Phase 7 Outbox + chaos test
 - [ ] Phase 8 Tracing
+- [ ] Phase 9 embed.batch
+- [ ] Phase 10 llm.complete: budgets, fallback, cost
+- [ ] Phase 11 ml.retrain + model registry
