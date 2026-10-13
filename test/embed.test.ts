@@ -72,7 +72,12 @@ describe("embed.batch", () => {
     const gap = calls[1].t - calls[0].t;
     expect(gap).toBeGreaterThanOrEqual(1900);
     expect(gap).toBeLessThan(4000);
-    expect(await env.prisma.jobRecord.findUniqueOrThrow({ where: { id: jobId } })).toMatchObject({ status: "completed", attempts: 1 });
+    // The callback goes out inside the handler, before the worker marks the record completed: wait for that.
+    const rec = await waitFor(async () => {
+      const r = await env.prisma.jobRecord.findUniqueOrThrow({ where: { id: jobId } });
+      return r.status === "completed" && r;
+    });
+    expect(rec).toMatchObject({ status: "completed", attempts: 1 });
   });
 
   it("129 items → 400", async () => {
