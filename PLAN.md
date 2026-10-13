@@ -243,3 +243,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 12 SSRF guard on outbound calls
 - [x] Phase 13 LLM budgets and usage over HTTP
 - [x] Phase 14 Token-protected /metrics
+- [x] `POST /embed` (sync embeddings for interactive use: PulseBoard search query and duplicate check; bulk stays on `embed.batch`). `test/embed-api.test.ts` 3 pass.

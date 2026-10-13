@@ -11,6 +11,7 @@ import { cleanupOutbox, startRelay } from "../outbox/relay.js";
 import { createQueues, jobTypes, type Queues } from "../queue/queues.js";
 import { authHook } from "./auth.js";
 import { demoRoutes } from "./demo.js";
+import { embedRoutes } from "./routes/embed.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { budgetAdminRoutes, llmUsageRoutes } from "./routes/llm.js";
 import { modelRoutes } from "./routes/models.js";
@@ -63,6 +64,7 @@ export function buildApp(deps: Deps, { demo = false } = {}) {
     jobRoutes(authed, deps);
     modelRoutes(authed, deps);
     llmUsageRoutes(authed, deps);
+    embedRoutes(authed);
   });
   if (demo) app.register(async (pub) => demoRoutes(pub, deps));
   return app;
