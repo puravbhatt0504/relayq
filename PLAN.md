@@ -99,7 +99,7 @@ relayq/
 - AWS (`infra/`, CDK, ap-south-1): two ECS Fargate services (api, worker 1–3 autoscaled on a `RelayQ/QueueDepth` CloudWatch metric the api emits as EMF), ElastiCache, RDS, SES, S3, ALB behind CloudFront for HTTPS. No NAT. Secrets in Secrets Manager (CloudFormation can't create SSM SecureStrings).
 - **Budget constraint (AWS Free plan, credits only):** AWS runs for a fixed window, not permanently. `RelayQReaper` stack: one-time EventBridge Scheduler `DeleteStack` at `DESTROY_AT` (default +5 days) + $25 cost-budget email alert. Always-on public demo instead runs free on Render (web service sleeps when idle, wakes on request) + Neon Postgres + Render Key Value: `render.yaml`, `src/all.ts`, public `/demo` page.
 
-**Done:** CI green on `main`; `curl https://<prod>/health` → `200 {"redis":"ok","db":"ok"}` on the AWS CloudFront URL while the window is open; demo run on AWS completes 100/100 jobs; Render demo URL wakes from sleep and completes a demo run. ~~PulseBoard export end-to-end in prod~~ deferred until PulseBoard's own deploy exists (needs its service-auth board fetch + callback route).
+**Done:** CI green on `main`; `curl <prod>/health` → `200 {"redis":"ok","db":"ok"}` on the AWS URL while the window is open (HTTP on the ALB: CloudFront needs AWS account verification, requested); demo run on AWS completes 100/100 jobs; Render demo URL wakes from sleep and completes a demo run. ~~PulseBoard export end-to-end in prod~~ deferred until PulseBoard's own deploy exists (needs its service-auth board fetch + callback route).
 
 ## Phase 6 — Throughput number (the resume number)
 
@@ -145,7 +145,7 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 2 Workers / retries / DLQ
 - [x] Phase 3 Rate limits / priority
 - [x] Phase 4 Observability
-- [ ] Phase 5 Docker / CI / AWS
+- [x] Phase 5 Docker / CI / AWS (AWS window ends 2026-10-15; HTTPS on AWS pending CloudFront verification)
 - [x] Phase 6 Throughput
 - [x] Phase 7 Outbox + chaos test
 - [ ] Phase 8 Tracing
