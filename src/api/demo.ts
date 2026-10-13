@@ -19,7 +19,7 @@ export function demoRoutes(app: FastifyInstance, { prisma, redis }: Deps) {
       return reply.code(429).send({ error: `one run per ${RUN_COOLDOWN_S}s, try again shortly` });
     }
     // Single-process hosts reach the sink on localhost; on ECS workers are separate tasks, so it's the ALB URL.
-    const sinkUrl = process.env.DEMO_SINK_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3000}/demo/sink`;
+    const sinkUrl = process.env.DEMO_SINK_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3200}/demo/sink`;
     const run = Date.now();
     for (let i = 0; i < JOBS_PER_RUN; i += 20) {
       await Promise.all(Array.from({ length: 20 }, (_, k) => enqueue(prisma, {
