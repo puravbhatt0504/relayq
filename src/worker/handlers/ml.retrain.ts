@@ -22,8 +22,10 @@ const envName = (name: string) => name.toUpperCase().replace(/-/g, "_");
 // ponytail: local `docker run` only (the worker needs a Docker socket); ECS RunTask when retrains must run in AWS.
 export const dockerTrainer: Trainer = async (name, dataUrl) => {
   const image = process.env[`TRAINER_IMAGE_${envName(name)}`] ?? `pulseboard-ml-${name}`;
+  // Without a bucket the trainer writes file:///models/...; mount a host dir there so the model outlives `--rm`.
+  const modelDir = process.env.TRAINER_MODEL_DIR;
   const { stdout } = await promisify(execFile)(
-    "docker", ["run", "--rm", "-e", `DATA_URL=${dataUrl}`, "-e", `MODEL_NAME=${name}`, image],
+    "docker", ["run", "--rm", ...(modelDir ? ["-v", `${modelDir}:/models`] : []), "-e", `DATA_URL=${dataUrl}`, "-e", `MODEL_NAME=${name}`, image],
     { timeout: 3_600_000, maxBuffer: 64 * 1024 * 1024 },
   );
   return trainerOutput.parse(JSON.parse(stdout.trim().split("\n").at(-1) ?? ""));
