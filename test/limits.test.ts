@@ -26,9 +26,12 @@ afterAll(() => env?.stop());
 describe("per-tenant rate limit", () => {
   // Scaled-down window: 10 jobs / 1 s stands in for 100 jobs / 60 s.
   it("300 jobs at 10/s: ≤10 start in the first window, excess stays queued, other tenants unaffected", async () => {
-    const w = workersWith({ tenantLimit: { max: 10, windowMs: 1000 } });
     const ids: string[] = (await Promise.all(Array.from({ length: 300 }, () => env.post(hook())))).map((r) => r.json().jobId);
     const { jobId: other } = (await env.post(hook(), KEY_B)).json();
+    // Start workers only once everything is in Redis: on a busy event loop (slow CI) the gap between the limiter
+    // opening its window and the first handler start grows, and the "first window" measured from t0 drifts.
+    await env.drained();
+    const w = workersWith({ tenantLimit: { max: 10, windowMs: 1000 } });
 
     // Tenant B isn't stuck behind A's backlog.
     await waitFor(async () => starts.some((s) => s.id === other), 3000);
