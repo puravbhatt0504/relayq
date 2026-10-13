@@ -8,7 +8,9 @@ services:
     plan: free
     region: singapore
     healthCheckPath: /health
-    dockerCommand: sh -c "node_modules/.bin/prisma migrate deploy && exec node dist/all.js"
+    # No shell quoting here: Render passes quotes through literally. The npm script runs
+    # `prisma migrate deploy && node dist/all.js` through a shell itself.
+    dockerCommand: npm run start:all
     envVars:
       - key: DATABASE_URL
         sync: false

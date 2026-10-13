@@ -15,7 +15,7 @@
     "key": "node dist/cli/create-key.js",
     "migrate": "prisma migrate deploy",
     "chaos": "tsx chaos/run.ts",
-    "start:all": "node dist/all.js"
+    "start:all": "prisma migrate deploy && node dist/all.js"
   },
   "engines": {
     "node": ">=20"
