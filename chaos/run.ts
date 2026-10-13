@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 
 const JOBS = Number(process.env.CHAOS_JOBS ?? 10_000);
-const API = "http://localhost:3000";
+const API = "http://localhost:3200";
 const SINK = "http://localhost:5679";
 const tenant = `chaos-${Date.now()}`;
 const env = { ...process.env, TENANT_JOBS_PER_MIN: "1000000" };

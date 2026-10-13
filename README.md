@@ -7,9 +7,9 @@ First client: PulseBoard. Plan and contracts: [PLAN.md](PLAN.md).
 ## Run locally
 
 ```bash
-docker compose up -d --build                                  # api :3000, 3 workers, redis, postgres, mailhog :8025, prometheus :9090, grafana :3001
+docker compose up -d --build                                  # api :3200, 3 workers, redis, postgres, mailhog :8025, prometheus :9090, grafana :3001
 docker compose exec api node dist/cli/create-key.js my-tenant # prints an rq_ key once
-curl -X POST localhost:3000/jobs -H "authorization: Bearer rq_..." -H "content-type: application/json" \
+curl -X POST localhost:3200/jobs -H "authorization: Bearer rq_..." -H "content-type: application/json" \
   -d '{"type":"webhook.deliver","payload":{"url":"https://example.com/hook","body":{"hi":1}}}'
 ```
 

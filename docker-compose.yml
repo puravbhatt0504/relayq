@@ -33,7 +33,7 @@ services:
     <<: *app
     command: ["node", "--import", "./dist/otel.js", "dist/api/server.js"]
     environment: { <<: *env, OTEL_SERVICE_NAME: relayq-api }
-    ports: ["3000:3000"]
+    ports: ["3200:3000"] # host 3200 (3000 kept free for other apps)
 
   worker:
     <<: *app
