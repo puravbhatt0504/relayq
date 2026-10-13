@@ -29,6 +29,16 @@ describe("public demo", () => {
     expect((await demo.inject({ method: "POST", url: "/jobs", payload: {} })).statusCode).toBe(401);
   });
 
+  it("serves scene assets, and nothing outside the assets folder", async () => {
+    const glb = await demo.inject({ url: "/demo/assets/Soldier.glb" });
+    expect(glb.statusCode).toBe(200);
+    expect(glb.headers["content-type"]).toBe("model/gltf-binary");
+    expect((await demo.inject({ url: "/demo/assets/hill.js" })).headers["content-type"]).toContain("text/javascript");
+    expect((await demo.inject({ url: "/demo/assets/%2e%2e%2f%2e%2e%2f%2e%2e%2fpackage.json" })).statusCode).toBe(404);
+    expect((await demo.inject({ url: "/demo/assets/..%5c..%5c..%5csrc%5capi%5cdemo.ts" })).statusCode).toBe(404);
+    expect((await demo.inject({ url: "/demo/assets/missing.glb" })).statusCode).toBe(404);
+  });
+
   it("run enqueues 100 jobs to the built-in sink; flaky ones retry once; cooldown enforced", async () => {
     expect((await demo.inject({ method: "POST", url: "/demo/run" })).statusCode).toBe(202);
     expect((await demo.inject({ method: "POST", url: "/demo/run" })).statusCode).toBe(429);

@@ -19,6 +19,7 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY prisma ./prisma
+COPY public ./public
 USER node
 EXPOSE 3200 9100
 CMD ["node", "dist/api/server.js"]
