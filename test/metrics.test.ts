@@ -32,6 +32,21 @@ describe("/metrics", () => {
     expect(res.body).toContain('relayq_job_duration_seconds_count{type="webhook.deliver"} 10');
     expect(res.body).toContain('relayq_queue_depth{queue="webhook.deliver"} 0');
   });
+
+  it("METRICS_TOKEN set → bearer token required; unset → open", async () => {
+    const get = (authorization?: string) => env.app.inject({ url: "/metrics", headers: authorization ? { authorization } : {} });
+    process.env.METRICS_TOKEN = "t";
+    try {
+      expect((await get()).statusCode).toBe(401);
+      expect((await get("Bearer wrong")).statusCode).toBe(401);
+      const ok = await get("Bearer t");
+      expect(ok.statusCode).toBe(200);
+      expect(ok.body).toContain("relayq_jobs_total");
+    } finally {
+      delete process.env.METRICS_TOKEN;
+    }
+    expect((await get()).statusCode).toBe(200);
+  });
 });
 
 describe("/admin/queues", () => {

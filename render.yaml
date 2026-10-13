@@ -26,6 +26,9 @@ services:
         generateValue: true
       - key: TENANT_JOBS_PER_MIN
         value: "100"
+      # /metrics names tenants and their LLM spend; scrape it with this bearer token.
+      - key: METRICS_TOKEN
+        generateValue: true
 
   # In-memory only on the free plan: a restart drops queued BullMQ jobs (their JobRecords stay in Postgres).
   - type: keyvalue

@@ -212,6 +212,17 @@ Today a budget can only be set with SQL, and tenants can't see what they've spen
 - `PUT /admin/budgets/B {monthlyUsdLimit: 5}` without auth → 401; with auth → 200, and B's usage then shows `limitUsd 5`. Limit `-1` → 400.
 - No budget row and the env default unset → `limitUsd 0`.
 
+## Phase 14 — Token-protected `/metrics`
+
+`/metrics` on the public api exposes tenant names, per-tenant LLM cost and job volumes.
+
+- `src/api/server.ts`: if `METRICS_TOKEN` is set, `GET /metrics` requires `Authorization: Bearer <token>` (timing-safe compare), else `401`. Unset = open, as today (local compose Prometheus).
+- `render.yaml` generates `METRICS_TOKEN`. `/health` stays open: Render's health check needs it, and it reveals only `{redis, db}`.
+
+**Done:** `metrics.test.ts`:
+- With `METRICS_TOKEN=t`: no header → 401; `Bearer wrong` → 401; `Bearer t` → 200 and the body contains `relayq_jobs_total`.
+- Unset → 200 with no header.
+
 ---
 
 ## Out of scope
@@ -231,3 +242,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 11 ml.retrain + model registry (trainer runs via local `docker run`; ECS RunTask skipped. Verified against the real pulseboard-ml-eta image, 2026-10-13)
 - [x] Phase 12 SSRF guard on outbound calls
 - [x] Phase 13 LLM budgets and usage over HTTP
+- [x] Phase 14 Token-protected /metrics

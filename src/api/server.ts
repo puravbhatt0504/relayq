@@ -17,6 +17,8 @@ import { modelRoutes } from "./routes/models.js";
 
 export type Deps = { prisma: PrismaClient; redis: Redis; queues: Queues };
 
+const safeEqual = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+
 /** Basic auth from ADMIN_USER / ADMIN_PASSWORD; with either unset, every request is refused. */
 function basicAuth(user = process.env.ADMIN_USER, pass = process.env.ADMIN_PASSWORD) {
   const expected = user && pass ? Buffer.from(`Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`) : null;
@@ -32,8 +34,12 @@ export function buildApp(deps: Deps, { demo = false } = {}) {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
   registerQueueDepth(deps.queues);
 
-  // ponytail: /metrics and /health are open; keep them off the public listener (ALB rule / SG) in prod.
-  app.get("/metrics", async (_req, reply) => reply.type(registry.contentType).send(await registry.metrics()));
+  // /metrics names tenants and their LLM spend: with METRICS_TOKEN set it needs that bearer token. /health stays open.
+  app.get("/metrics", async (req, reply) => {
+    const token = process.env.METRICS_TOKEN;
+    if (token && !safeEqual(req.headers.authorization ?? "", `Bearer ${token}`)) return reply.code(401).send({ error: "unauthorized" });
+    return reply.type(registry.contentType).send(await registry.metrics());
+  });
   app.get("/health", async (_req, reply) => {
     const [redis, db] = await Promise.all([
       deps.redis.ping().then(() => "ok", () => "down"),
