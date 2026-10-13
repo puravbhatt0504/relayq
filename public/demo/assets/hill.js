@@ -689,9 +689,36 @@ async function start() {
     if (flag.userData.pulse > 0) flag.userData.pulse = Math.max(0, flag.userData.pulse - dt * 1.2);
   }
 
-  // ---- HTML labels pinned to points in the world.
-  const tags = [["API", SLAB.x, 10.5, 0], ["Postgres", SLAB.x, SLAB_TOP - 1.2, 3.4], ["Queue", -4.5, 0.2, 5.6], ["Workers", 6.5, profile(6.5) + 3.6, -9.5], ["Your webhook", FLAG_X, H + 5.2, 0]]
-    .map(([text, x, y, z]) => { const el = document.createElement("div"); el.className = "tag"; el.textContent = text; host.appendChild(el); return { el, v: V(x, y, z) }; });
+  // ---- Callouts, like waypoint markers in a game: each pill hangs off a leader line whose pin sits
+  // on the thing it names, and follows it live. `at` is the pin, `top` (a world point) or `off`
+  // (screen px) places the pill, `flat` pins lie on the ground, `dash` marks the API's drop column.
+  const NS = "http://www.w3.org/2000/svg", leads = document.createElementNS(NS, "svg");
+  leads.setAttribute("class", "leads"); leads.setAttribute("aria-hidden", "true");
+  host.appendChild(leads);
+  const svgEl = (n, cls) => { const e = document.createElementNS(NS, n); if (cls) e.setAttribute("class", cls); leads.appendChild(e); return e; };
+  const queueAt = (v) => {
+    let n = 0; v.set(0, 0, 0);
+    for (const b of stones) if (waiting(b) && !b.air && b.p.x < -1 && slabTop(b.p.x, b.p.z) === -Infinity) { v.add(b.p); n++; }
+    if (!n) return v.set(-4.2, ground(-4.2, 2.5), 2.5);
+    v.multiplyScalar(1 / n); return v.setY(ground(v.x, v.z));
+  };
+  const workersAt = (v) => { // the head of the worker nearest the middle of the crew, so the pin always lands on someone
+    let cx = 0, cz = 0; for (const w of workers) { cx += w.x; cz += w.z; } cx /= workers.length; cz /= workers.length;
+    let best = workers[0], bd = Infinity; for (const w of workers) { const d = (w.x - cx) ** 2 + (w.z - cz) ** 2; if (d < bd) { bd = d; best = w; } }
+    return v.set(best.x, best.model.position.y + SH + 0.45, best.z);
+  };
+  const tags = [
+    { text: "API", sub: "jobs drop in", at: (v) => v.set(SLAB.x - 0.3, SLAB_TOP + 0.05, 0), top: V(SLAB.x - 0.3, 12.5, 0), dash: true, flat: true },
+    { text: "Postgres", at: (v) => v.set(SLAB.x - 1.3, SLAB_TOP - 1.1, SLAB.wid / 2), off: [-54, 40] },
+    { text: "Queue", at: queueAt, off: [-36, 52], flat: true, smooth: 1.5 },
+    { text: "Workers", at: workersAt, off: [30, -54], smooth: 3 },
+    { text: "Your webhook", at: (v) => v.set(FLAG_X, H + 4.15, 0), off: [-62, -34] },
+  ].map((t) => {
+    const el = document.createElement("div"); el.className = "tag"; el.textContent = t.text;
+    if (t.sub) { const s = document.createElement("small"); s.textContent = t.sub; el.appendChild(s); }
+    host.appendChild(el);
+    return { ...t, el, line: svgEl("line", t.dash ? "dash" : ""), pin: svgEl(t.flat ? "ellipse" : "circle"), s: null, box: { x: 0, y: 0, w: 0, h: 0 } };
+  });
 
   // ---- Camera: a three-quarter view up the slope. On wide screens the frame shifts right so the
   // copy on the left sits over open sky. Drag to swing it a little.
@@ -728,14 +755,42 @@ async function start() {
   let visible = true;
   new IntersectionObserver((es) => { visible = es[0].isIntersecting; if (!visible) { pending = []; spawnLeft = 0; } }).observe(host);
 
-  const _l = V();
+  const _l = V(), _at = V();
+  let labelT = 0;
   function labels() {
-    const w = host.clientWidth, h = host.clientHeight;
+    const w = host.clientWidth, h = host.clientHeight, now = performance.now(), k = labelT ? Math.min(1, (now - labelT) / 1000) : 1, sc = w < 640 ? 0.7 : 1;
+    labelT = now;
+    const toScreen = (v, o) => { _l.copy(v).project(cam); o.x = ((_l.x + 1) / 2) * w; o.y = ((1 - _l.y) / 2) * h; return _l.z < 1; };
     for (const t of tags) {
-      _l.copy(t.v).project(cam);
-      const half = t.el.offsetWidth / 2 + 8, x = clamp(((_l.x + 1) / 2) * w, half, w - half);
-      t.el.style.transform = `translate(${x.toFixed(1)}px,${(((1 - _l.y) / 2) * h).toFixed(1)}px) translate(-50%,-50%)`;
-      t.el.style.opacity = _l.z < 1 ? "" : "0";
+      t.at(_at);
+      if (!t.s || !t.smooth || reduce) t.s = (t.s || V()).copy(_at); else t.s.lerp(_at, Math.min(1, k * t.smooth));
+      t.pt = t.pt || {};
+      t.ok = toScreen(t.s, t.pt);
+      const b = t.box; b.w = t.el.offsetWidth; b.h = t.el.offsetHeight;
+      if (t.top) { toScreen(t.top, b); b.x -= b.w / 2; b.y -= b.h; }
+      else { b.x = t.pt.x + t.off[0] * sc - b.w / 2; b.y = t.pt.y + t.off[1] * sc - b.h / 2; }
+      b.x = clamp(b.x, 8, w - b.w - 8); b.y = clamp(b.y, 8, h - b.h - 8);
+    }
+    // Pills that collide slide apart vertically, then stay inside the frame.
+    for (let pass = 0; pass < 4; pass++) for (let i = 0; i < tags.length; i++) for (let j = i + 1; j < tags.length; j++) {
+      const A = tags[i].box, B = tags[j].box;
+      const ox = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x) + 6, oy = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y) + 6;
+      if (ox <= 0 || oy <= 0) continue;
+      const s = A.y + A.h / 2 < B.y + B.h / 2 ? -1 : 1;
+      A.y += (s * oy) / 2; B.y -= (s * oy) / 2;
+    }
+    for (const t of tags) {
+      const b = t.box, p = t.pt;
+      b.x = clamp(b.x, 8, w - b.w - 8); b.y = clamp(b.y, 8, h - b.h - 8);
+      t.el.style.transform = `translate(${b.x.toFixed(1)}px,${b.y.toFixed(1)}px)`;
+      t.el.style.opacity = t.ok ? "" : "0";
+      // The leader runs from the pin to the nearest edge of its pill.
+      const ex = clamp(p.x, b.x, b.x + b.w), ey = clamp(p.y, b.y, b.y + b.h), show = t.ok && Math.hypot(ex - p.x, ey - p.y) > 4;
+      t.line.setAttribute("x1", p.x.toFixed(1)); t.line.setAttribute("y1", p.y.toFixed(1));
+      t.line.setAttribute("x2", ex.toFixed(1)); t.line.setAttribute("y2", ey.toFixed(1));
+      t.line.style.display = t.pin.style.display = show ? "" : "none";
+      t.pin.setAttribute("cx", p.x.toFixed(1)); t.pin.setAttribute("cy", p.y.toFixed(1));
+      if (t.flat) { t.pin.setAttribute("rx", 6 * sc); t.pin.setAttribute("ry", 2.4 * sc); } else t.pin.setAttribute("r", 3 * sc);
     }
   }
   function render() { place(); gl.render(scene, cam); labels(); }

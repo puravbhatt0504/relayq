@@ -161,7 +161,12 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .scrim{position:absolute;inset:0;pointer-events:none;
   background:linear-gradient(90deg,var(--bg) 0%,color-mix(in srgb,var(--bg) 78%,transparent) 26%,transparent 52%),linear-gradient(0deg,var(--bg),transparent 16%)}
 .tag{position:absolute;left:0;top:0;font:500 11.5px/1 var(--mono);color:var(--fg-2);background:color-mix(in srgb,var(--surface) 88%,transparent);
-  border:1px solid var(--line);padding:5px 7px;border-radius:6px;white-space:nowrap;pointer-events:none;will-change:transform}
+  border:1px solid var(--line);padding:5px 7px;border-radius:6px;white-space:nowrap;pointer-events:none;will-change:transform;
+  box-shadow:0 2px 8px rgba(10,20,10,.25);backdrop-filter:blur(6px);transition:opacity .3s}
+.tag small{display:block;margin-top:3px;font:10px/1 var(--mono);color:var(--fg-3)}
+.leads{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;filter:drop-shadow(0 1px 1px rgba(0,0,0,.45))}
+.leads line{stroke:#fff;stroke-opacity:.9;stroke-width:1.25}.leads line.dash{stroke-dasharray:3 4}
+.leads circle,.leads ellipse{fill:#fff;stroke:rgba(0,0,0,.35);stroke-width:1}
 .hud{position:absolute;right:24px;bottom:24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;font:12px var(--mono);color:var(--fg-3);
   background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 12px;backdrop-filter:blur(6px)}
 .hud b{color:var(--fg);font-weight:500}
@@ -275,7 +280,7 @@ footer nav{gap:24px}
   .wrap{padding:0 16px}nav.top{display:none}
   section{padding:64px 0}
   .scene{height:400px}.hint{display:none}.hud{left:16px;right:16px;gap:12px}
-  .tag{font-size:10px;padding:4px 5px}
+  .tag{font-size:10px;padding:4px 5px}.tag small{font-size:9px}
   .flow,.types{grid-template-columns:1fr;gap:28px}
   .bento{grid-template-columns:1fr}.tile.hero-t,.tile.wide{grid-column:auto}.tile.wide{flex-direction:column;align-items:flex-start}
   .counts{grid-template-columns:repeat(2,minmax(0,1fr))}
