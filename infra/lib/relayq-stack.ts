@@ -108,7 +108,7 @@ export class RelayQStack extends cdk.Stack {
       cluster, cpu: 256, memoryLimitMiB: 512, desiredCount: 1, minHealthyPercent: 100,
       assignPublicIp: true, taskSubnets: { subnetType: ec2.SubnetType.PUBLIC }, securityGroups: [tasksSg],
       taskImageOptions: {
-        image, containerPort: 3000,
+        image, containerPort: 3200,
         command: ["sh", "-c", `export DATABASE_URL="${dbUrl}" && node_modules/.bin/prisma migrate deploy && exec node dist/api/server.js`],
         environment: { ...env, DEMO: "1", EMF_NAMESPACE: "RelayQ", ADMIN_USER: "admin" },
         secrets: { ...appSecrets, ADMIN_PASSWORD: ecs.Secret.fromSecretsManager(adminSecret) },

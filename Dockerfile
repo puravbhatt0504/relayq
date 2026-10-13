@@ -14,10 +14,11 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PORT=3200
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY prisma ./prisma
 USER node
-EXPOSE 3000 9100
+EXPOSE 3200 9100
 CMD ["node", "dist/api/server.js"]
