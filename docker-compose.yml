@@ -11,7 +11,7 @@ x-app: &app
     ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
     PULSEBOARD_URL: ${PULSEBOARD_URL:-http://host.docker.internal:4000}
     PULSEBOARD_TOKEN: ${PULSEBOARD_TOKEN:-}
-    EXPORT_BUCKET: ${EXPORT_BUCKET:-relayq-exports}
+    EXPORT_BUCKET: ${EXPORT_BUCKET:-} # unset = export sent inline as a data: URL
     TENANT_JOBS_PER_MIN: ${TENANT_JOBS_PER_MIN:-100}
     WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
     PORT: "3200" # app listens on 3200 inside the container too (3000 kept free)

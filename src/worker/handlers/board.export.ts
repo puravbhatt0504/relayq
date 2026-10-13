@@ -20,13 +20,19 @@ export const boardExport: Handler<"board.export"> = async ({ boardId, format, ca
   if (!res.ok) throw new Error(`fetch board ${boardId} → ${res.status}`);
   const board = (await res.json()) as Board;
 
+  const Body = format === "json" ? JSON.stringify(board) : toCsv(board);
+  const ContentType = format === "json" ? "application/json" : "text/csv";
   const Bucket = process.env.EXPORT_BUCKET;
+  // ponytail: no bucket (free demo) → file goes inline in the callback; fine for board-sized files, set EXPORT_BUCKET for big ones.
+  if (!Bucket) {
+    const url = `data:${ContentType};base64,${Buffer.from(Body).toString("base64")}`;
+    return once("callback", async () => {
+      await signedPost(callbackUrl, { jobId, url }, `${jobId}:callback`);
+      return { inline: true, bytes: Buffer.byteLength(Body) };
+    });
+  }
   const Key = `exports/${boardId}/${jobId}.${format}`;
-  await s3.send(new PutObjectCommand({
-    Bucket, Key,
-    Body: format === "json" ? JSON.stringify(board) : toCsv(board),
-    ContentType: format === "json" ? "application/json" : "text/csv",
-  }));
+  await s3.send(new PutObjectCommand({ Bucket, Key, Body, ContentType }));
   // ponytail: presigned URL dies with the signing credentials (hours on an ECS task role); proxy downloads if users need longer links.
   const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket, Key }), { expiresIn: 7 * 86400 });
   return once("callback", async () => {

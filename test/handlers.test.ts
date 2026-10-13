@@ -20,3 +20,28 @@ it("toCsv quotes commas, quotes and newlines", () => {
   });
   expect(csv).toBe('column,card_id,card_title\n"To do, now",c1,"say ""hi""\nthere"\n"To do, now",c2,plain');
 });
+
+it("board.export without EXPORT_BUCKET posts the file inline as a data: URL", async () => {
+  const { createServer } = await import("node:http");
+  const { boardExport } = await import("../src/worker/handlers/board.export.js");
+  let callback: { jobId: string; url: string } | undefined;
+  const srv = createServer((req, res) => {
+    if (req.url === "/boards/b1") return res.end(JSON.stringify({ id: "b1", title: "B", columns: [{ title: "Todo", cards: [{ id: "c1", title: "x" }] }] }));
+    let raw = "";
+    req.on("data", (d) => (raw += d)).on("end", () => { callback = JSON.parse(raw); res.end("ok"); });
+  });
+  await new Promise<void>((r) => srv.listen(0, r));
+  const base = `http://localhost:${(srv.address() as { port: number }).port}`;
+  const saved = { ...process.env };
+  Object.assign(process.env, { PULSEBOARD_URL: base, WEBHOOK_SECRET: "s" });
+  delete process.env.EXPORT_BUCKET;
+  try {
+    const once = (async (_s: string, fn: () => Promise<unknown>) => fn()) as never;
+    await boardExport({ boardId: "b1", format: "csv", callbackUrl: `${base}/cb` }, { jobId: "j1", tenant: "t", once } as never);
+  } finally {
+    process.env = saved;
+    srv.close();
+  }
+  expect(callback?.jobId).toBe("j1");
+  expect(callback?.url).toBe(`data:text/csv;base64,${Buffer.from("column,card_id,card_title\nTodo,c1,x").toString("base64")}`);
+});
