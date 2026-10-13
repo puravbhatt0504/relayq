@@ -129,8 +129,11 @@ export function startWorkers({ connection, prisma, dead, handlers: overrides, co
   return { workers, close: () => Promise.all(workers.map((w) => w.close())).then(() => {}) };
 }
 
-export function onSigterm(close: () => Promise<void>, exit: (code: number) => void = process.exit, graceMs = 30_000) {
-  process.once("SIGTERM", async () => {
+// `signals` is injectable so tests needn't emit a real SIGTERM (which also reaches the test runner's own handler).
+export function onSigterm(
+  close: () => Promise<void>, exit: (code: number) => void = process.exit, graceMs = 30_000, signals: NodeJS.EventEmitter = process,
+) {
+  signals.once("SIGTERM", async () => {
     const timer = setTimeout(() => exit(1), graceMs);
     await close();
     clearTimeout(timer);

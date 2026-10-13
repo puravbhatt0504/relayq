@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -97,8 +98,9 @@ describe("graceful shutdown", () => {
     await settled(jobId, "active");
 
     const exit = vi.fn();
-    onSigterm(workers.close, exit);
-    process.emit("SIGTERM");
+    const signals = new EventEmitter();
+    onSigterm(workers.close, exit, 30_000, signals);
+    signals.emit("SIGTERM");
 
     await waitFor(async () => exit.mock.calls.length > 0);
     expect(exit).toHaveBeenCalledWith(0);
