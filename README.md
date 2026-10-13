@@ -22,10 +22,11 @@ Tests (need Docker for Testcontainers): `npm test`.
 | `POST /jobs {type, payload, idempotencyKey?, delayMs?, priority?}` | `202 {jobId}`; same idempotency key within 24 h → `200` with the original id; `429` over 10,000 queued per tenant |
 | `GET /jobs/:id` | `{id, type, status, attempts, result?, error?}` |
 | `POST /jobs/:id/retry` | re-queue a `dead` job |
+| `GET /models/:name` | promoted model version + version history (`ml.retrain` registry) |
 | `GET /metrics`, `GET /health` | Prometheus; `{redis, db}` |
 | `/admin/queues` | bull-board, basic auth (`ADMIN_USER` / `ADMIN_PASSWORD`) |
 
-Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body), `embed.batch` (Voyage, batched across jobs), `llm.complete` (Anthropic; per-tenant monthly budget, shared TPM limit, fallback model, cost ledger in `LlmUsage`).
+Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body), `embed.batch` (Voyage, batched across jobs), `llm.complete` (Anthropic; per-tenant monthly budget, shared TPM limit, fallback model, cost ledger in `LlmUsage`), `ml.retrain` (runs the trainer image, promotes the new version only if its test MAE ≤ the current one, notifies `MODEL_SUBSCRIBERS_<NAME>`).
 
 ## Deploy
 

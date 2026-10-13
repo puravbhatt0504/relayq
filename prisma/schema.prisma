@@ -75,3 +75,18 @@ model LlmUsage {
 
   @@index([tenant, createdAt])
 }
+
+/// Model registry (ml.retrain). At most one `promoted` row per name: partial unique index in migration 4_models.
+model ModelVersion {
+  id        BigInt   @id @default(autoincrement())
+  name      String
+  version   Int
+  s3Uri     String
+  metrics   Json
+  status    String // candidate | promoted | rejected | retired
+  reason    String?
+  jobId     String
+  createdAt DateTime @default(now())
+
+  @@unique([name, version])
+}

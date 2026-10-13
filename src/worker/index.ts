@@ -12,6 +12,7 @@ import { boardExport } from "./handlers/board.export.js";
 import { emailDigest } from "./handlers/email.digest.js";
 import { embedBatch } from "./handlers/embed.batch.js";
 import { llmComplete } from "./handlers/llm.complete.js";
+import { mlRetrain } from "./handlers/ml.retrain.js";
 import { Rejected, RetryLater, type Handler, type Handlers } from "./handlers/types.js";
 import { webhookDeliver } from "./handlers/webhook.deliver.js";
 
@@ -23,6 +24,7 @@ export const defaultHandlers: Handlers = {
   "webhook.deliver": webhookDeliver,
   "embed.batch": embedBatch,
   "llm.complete": llmComplete,
+  "ml.retrain": mlRetrain(),
 };
 
 type Limit = { max: number; windowMs: number };

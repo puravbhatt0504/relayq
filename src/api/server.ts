@@ -12,6 +12,7 @@ import { createQueues, jobTypes, type Queues } from "../queue/queues.js";
 import { authHook } from "./auth.js";
 import { demoRoutes } from "./demo.js";
 import { jobRoutes } from "./routes/jobs.js";
+import { modelRoutes } from "./routes/models.js";
 
 export type Deps = { prisma: PrismaClient; redis: Redis; queues: Queues };
 
@@ -52,6 +53,7 @@ export function buildApp(deps: Deps, { demo = false } = {}) {
   app.register(async (authed) => {
     authed.addHook("preHandler", authHook(deps.prisma));
     jobRoutes(authed, deps);
+    modelRoutes(authed, deps);
   });
   if (demo) app.register(async (pub) => demoRoutes(pub, deps));
   return app;

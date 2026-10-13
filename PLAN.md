@@ -187,4 +187,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 8 Tracing (RelayQ side: otel.test + Jaeger trace api→worker in compose. PulseBoard single-trace check pending its Phase 9; ADOT→X-Ray skipped, AWS window too short)
 - [x] Phase 9 embed.batch
 - [x] Phase 10 llm.complete: budgets, fallback, cost (server-side refusal fallbacks skipped; Haiku 5.5 cache-read price assumed)
-- [ ] Phase 11 ml.retrain + model registry
+- [x] Phase 11 ml.retrain + model registry (trainer runs via local `docker run`; ECS RunTask skipped. Trainer stdout contract in src/worker/handlers/ml.retrain.ts, PulseBoard ml/eta still to implement it)

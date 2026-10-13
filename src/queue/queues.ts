@@ -38,6 +38,11 @@ export const payloadSchemas = {
     maxTokens: z.number().int().min(1).max(16_000), // non-streaming call with a 60 s timeout
     callbackUrl: z.string().url(),
   }),
+  // modelName also names the trainer image and env vars (TRAINER_IMAGE_ETA, MODEL_SUBSCRIBERS_ETA).
+  "ml.retrain": z.object({
+    modelName: z.string().regex(/^[a-z][a-z0-9-]{0,40}$/),
+    dataUrl: z.string().url(),
+  }),
 };
 
 export type JobType = keyof typeof payloadSchemas;
@@ -54,6 +59,7 @@ export const typeLimits: Partial<Record<JobType, { max: number; duration: number
 /** Per-type worker concurrency (default WORKER_CONCURRENCY). Embeds need many jobs in flight for the batcher to coalesce. */
 export const typeConcurrency: Partial<Record<JobType, number>> = {
   "embed.batch": 128,
+  "ml.retrain": 1, // a training run uses the whole box
 };
 
 // Retry policy is a Phase 2 concern; set here so every enqueue gets it.
