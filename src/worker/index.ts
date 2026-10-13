@@ -1,5 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
-import { DelayedError, Worker, type Job, type Queue } from "bullmq";
+import { DelayedError, UnrecoverableError, Worker, type Job, type Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
@@ -7,10 +7,11 @@ import { pino } from "pino";
 import { once } from "../lib/effects.js";
 import { contextFrom, SpanKind, withSpan } from "../lib/tracing.js";
 import { jobDuration, jobsTotal, registry } from "../lib/metrics.js";
-import { createQueues, jobTypes, typeLimits, type JobData } from "../queue/queues.js";
+import { createQueues, jobTypes, typeConcurrency, typeLimits, type JobData } from "../queue/queues.js";
 import { boardExport } from "./handlers/board.export.js";
 import { emailDigest } from "./handlers/email.digest.js";
-import type { Handler, Handlers } from "./handlers/types.js";
+import { embedBatch } from "./handlers/embed.batch.js";
+import { RetryLater, type Handler, type Handlers } from "./handlers/types.js";
 import { webhookDeliver } from "./handlers/webhook.deliver.js";
 
 const logger = pino({ name: "relayq-worker", enabled: process.env.NODE_ENV !== "test" });
@@ -19,12 +20,13 @@ export const defaultHandlers: Handlers = {
   "email.digest": emailDigest,
   "board.export": boardExport,
   "webhook.deliver": webhookDeliver,
+  "embed.batch": embedBatch,
 };
 
 type Limit = { max: number; windowMs: number };
 type Opts = {
   connection: Redis; prisma: PrismaClient; dead: Queue;
-  handlers?: Handlers; concurrency?: number; tenantLimit?: Limit;
+  handlers?: Partial<Handlers>; concurrency?: number; tenantLimit?: Limit; // handlers: overrides merged over the defaults
 };
 
 // Fixed window that opens on a tenant's first job; returns ms until it closes if over the limit, else 0.
@@ -35,7 +37,8 @@ if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
 if n > tonumber(ARGV[2]) then return redis.call('PTTL', KEYS[1]) end
 return 0`;
 
-export function startWorkers({ connection, prisma, dead, handlers = defaultHandlers, concurrency, tenantLimit }: Opts) {
+export function startWorkers({ connection, prisma, dead, handlers: overrides, concurrency, tenantLimit }: Opts) {
+  const handlers: Handlers = { ...defaultHandlers, ...overrides };
   concurrency ??= Number(process.env.WORKER_CONCURRENCY ?? 5);
   const limit = tenantLimit ?? { max: Number(process.env.TENANT_JOBS_PER_MIN ?? 100), windowMs: 60_000 };
   const workers = jobTypes.map((type) => {
@@ -67,7 +70,7 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
         log.info("job started");
         const timer = jobDuration.startTimer({ type });
         try {
-          const result = await handle(payload as never, { jobId: id, once: (step, fn) => once(prisma, id, step, fn) });
+          const result = await handle(payload as never, { jobId: id, tenant, once: (step, fn) => once(prisma, id, step, fn) });
           timer();
           await prisma.jobRecord.update({
             where: { id },
@@ -78,8 +81,16 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
           return result;
         } catch (err) {
           timer();
+          if (err instanceof RetryLater) {
+            // Back to the queue for the requested wait; BullMQ doesn't count a DelayedError as an attempt.
+            await job.moveToDelayed(Date.now() + err.delayMs, token);
+            await prisma.jobRecord.update({ where: { id }, data: { status: "queued", attempts: job.attemptsMade } });
+            log.info({ delayMs: err.delayMs }, err.message);
+            throw new DelayedError();
+          }
           const error = err instanceof Error ? err.message : String(err);
-          const last = attempts >= (job.opts.attempts ?? 1);
+          // UnrecoverableError (bad request, missing config): BullMQ won't retry, so this is the last attempt.
+          const last = err instanceof UnrecoverableError || attempts >= (job.opts.attempts ?? 1);
           if (last) await dead.add(type, { type, tenant, payload, error }, { jobId: id });
           await prisma.jobRecord.update({ where: { id }, data: { status: last ? "dead" : "failed", error } });
           jobsTotal.inc({ type, status: last ? "dead" : "failed" });
@@ -88,7 +99,7 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
         }
       });
     }, {
-      connection, concurrency, limiter: typeLimits[type],
+      connection, concurrency: typeConcurrency[type] ?? concurrency, limiter: typeLimits[type],
       // A killed worker leaves its jobs stalled; they're re-delivered (once() keeps effects single).
       // Default 1 would fail a job hit by two kills, so allow more.
       maxStalledCount: 10,

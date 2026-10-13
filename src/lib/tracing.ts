@@ -12,8 +12,11 @@ export function withSpan<T>(name: string, kind: SpanKind, parent: Context, attrs
     try {
       return await fn(span);
     } catch (err) {
-      span.recordException(err as Error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      // BullMQ's DelayedError means "parked on purpose" (rate limit, provider 429), not a failure.
+      if ((err as Error).name !== "DelayedError") {
+        span.recordException(err as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      }
       throw err;
     } finally {
       span.end();

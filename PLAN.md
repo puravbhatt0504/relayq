@@ -185,6 +185,6 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 6 Throughput
 - [x] Phase 7 Outbox + chaos test
 - [x] Phase 8 Tracing (RelayQ side: otel.test + Jaeger trace api→worker in compose. PulseBoard single-trace check pending its Phase 9; ADOT→X-Ray skipped, AWS window too short)
-- [ ] Phase 9 embed.batch
+- [x] Phase 9 embed.batch
 - [ ] Phase 10 llm.complete: budgets, fallback, cost
 - [ ] Phase 11 ml.retrain + model registry

@@ -16,6 +16,12 @@ export const payloadSchemas = {
     url: z.string().url(),
     body: z.unknown(),
   }),
+  // Tenant comes from the API key, not the payload.
+  "embed.batch": z.object({
+    items: z.array(z.object({ id: z.string().min(1), text: z.string().min(1).max(32_000) })).min(1).max(128),
+    model: z.string().min(1).default("voyage-3.5"),
+    callbackUrl: z.string().url(),
+  }),
 };
 
 export type JobType = keyof typeof payloadSchemas;
@@ -27,6 +33,11 @@ export type JobData = { tenant: string; payload: unknown; traceparent?: string }
 /** Per-type ceilings, shared by every worker process (BullMQ keeps the limiter in Redis). */
 export const typeLimits: Partial<Record<JobType, { max: number; duration: number }>> = {
   "email.digest": { max: 14, duration: 1000 }, // SES sandbox ceiling
+};
+
+/** Per-type worker concurrency (default WORKER_CONCURRENCY). Embeds need many jobs in flight for the batcher to coalesce. */
+export const typeConcurrency: Partial<Record<JobType, number>> = {
+  "embed.batch": 128,
 };
 
 // Retry policy is a Phase 2 concern; set here so every enqueue gets it.
