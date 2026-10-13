@@ -171,6 +171,28 @@ RelayQ becomes where AI work runs: batch embeddings, LLM calls with budgets and 
 
 **Done:** `retrain.test.ts` with a stub trainer: better MAE → promoted and subscriber notified once; worse MAE → `rejected`, promoted version unchanged; trainer crash → job retried per Phase 2, no half-promoted state (exactly one `promoted` row per name, asserted by a partial unique index).
 
+## Phase 12 — SSRF guard on outbound calls
+
+Every tenant-supplied URL (`webhook.deliver.url`, every `callbackUrl`, `MODEL_SUBSCRIBERS_*`) goes out through `signedPost` in `src/worker/handlers/webhook.deliver.ts`, so the guard lives there.
+
+- `src/lib/ssrf.ts`:
+  - `isBlockedIp(ip: string): boolean`. True for loopback, private (RFC 1918), CGNAT `100.64/10`, link-local `169.254/16` (incl. `169.254.169.254` metadata), `0/8`, multicast, reserved `240/4`, broadcast, IPv6 `::`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`, NAT64 `64:ff9b::/96`, and IPv4-mapped forms (`::ffff:127.0.0.1`). E.g. `isBlockedIp("10.1.2.3") → true`, `isBlockedIp("8.8.8.8") → false`.
+  - `isAllowed(host, port)`: matches `OUTBOUND_ALLOW` (comma list of `host` or `host:port`), plus `127.0.0.1:$PORT` when `DEMO=1` (the demo's own sink). Allowed hosts skip the IP check.
+  - `guardedLookup`: a `dns.lookup` drop-in for `http.request` that resolves all addresses and fails with `EBLOCKED` if any is blocked. The checked IP is the one connected to, so DNS rebinding can't swap it.
+- `signedPost` uses `node:http` / `node:https` with `guardedLookup` instead of `fetch`.
+  - Redirects are not followed: a 3xx is non-2xx and retries like any failure.
+  - Literal-IP hosts are checked before connecting, since `lookup` isn't called for them.
+  - A non-`http(s)` scheme or a blocked address → `Rejected("blocked_url: <reason>")`, so the job ends `failed` and is not retried.
+- Config: compose sets `OUTBOUND_ALLOW` for its internal sinks; tests set it to `127.0.0.1,localhost`.
+
+**Done:** `ssrf.test.ts`:
+- `isBlockedIp` table: blocked for `127.0.0.1`, `10.0.0.1`, `172.16.5.4`, `192.168.1.1`, `169.254.169.254`, `100.64.0.1`, `0.0.0.0`, `::1`, `fd00::1`, `fe80::1`, `::ffff:127.0.0.1`, `::ffff:a9fe:a9fe`; allowed for `8.8.8.8`, `1.1.1.1`, `2606:4700:4700::1111`.
+- `webhook.deliver` to `http://169.254.169.254/latest/meta-data/` → job `failed`, error starts `blocked_url`, 1 attempt.
+- To `http://localhost:<sink>/` with `OUTBOUND_ALLOW` unset → blocked, and the sink got 0 requests.
+- To the same sink with `OUTBOUND_ALLOW=localhost` → `completed`.
+- Sink answers `302 → http://169.254.169.254/` → not followed: the job retries and the sink saw no metadata request.
+- `ftp://example.com/x` → `blocked_url`.
+
 ---
 
 ## Out of scope
@@ -187,4 +209,5 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 8 Tracing (RelayQ side: otel.test + Jaeger trace api→worker in compose. PulseBoard single-trace check pending its Phase 9; ADOT→X-Ray skipped, AWS window too short)
 - [x] Phase 9 embed.batch
 - [x] Phase 10 llm.complete: budgets, fallback, cost (server-side refusal fallbacks skipped; Haiku 5.5 cache-read price assumed)
-- [x] Phase 11 ml.retrain + model registry (trainer runs via local `docker run`; ECS RunTask skipped. Trainer stdout contract in src/worker/handlers/ml.retrain.ts, PulseBoard ml/eta still to implement it)
+- [x] Phase 11 ml.retrain + model registry (trainer runs via local `docker run`; ECS RunTask skipped. Verified against the real pulseboard-ml-eta image, 2026-10-13)
+- [x] Phase 12 SSRF guard on outbound calls

@@ -16,6 +16,8 @@ x-app: &app
     WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
     PORT: "3200" # app listens on 3200 inside the container too (3000 kept free)
     OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    # Tenant URLs may not hit private addresses except these compose services (Phase 12 SSRF guard).
+    OUTBOUND_ALLOW: ${OUTBOUND_ALLOW:-sink,chaos-sink,host.docker.internal}
   depends_on:
     migrate: { condition: service_completed_successfully }
     redis: { condition: service_healthy }

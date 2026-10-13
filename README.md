@@ -26,6 +26,8 @@ Tests (need Docker for Testcontainers): `npm test`.
 | `GET /metrics`, `GET /health` | Prometheus; `{redis, db}` |
 | `/admin/queues` | bull-board, basic auth (`ADMIN_USER` / `ADMIN_PASSWORD`) |
 
+Outbound calls to tenant URLs refuse private, loopback and cloud-metadata addresses (checked at connect time, redirects not followed) unless the host is in `OUTBOUND_ALLOW`.
+
 Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-RelayQ-Signature`, hex HMAC-SHA256 of the body), `embed.batch` (Voyage, batched across jobs), `llm.complete` (Anthropic; per-tenant monthly budget, shared TPM limit, fallback model, cost ledger in `LlmUsage`), `ml.retrain` (runs the trainer image, promotes the new version only if its test MAE ≤ the current one, notifies `MODEL_SUBSCRIBERS_<NAME>`).
 
 ## Deploy
