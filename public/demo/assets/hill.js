@@ -13,25 +13,61 @@ const host = $("scene"), canvas = $("gl"), hint = $("hint");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const darkMQ = matchMedia("(prefers-color-scheme: dark)");
 const BASE = "/demo/assets/";
+const { smoothstep: S, clamp } = THREE.MathUtils;
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const UP = V(0, 1, 0), XAX = V(1, 0, 0);
 
-// ---- World layout, in metres. The slope climbs along +x from X0 to X1, then a plateau with the flag.
-const X0 = 0, X1 = 12, H = 6, R = 0.8;
+// ---- World, in metres. Boulders land on the Postgres slab, roll into the hollow at the foot of the
+// hill and wait. A worker pushes one up its lane from X0 to X1, across the plateau past the flag,
+// and over the far edge at X2. A slip sends it rolling back into the hollow.
+const X0 = 0, X1 = 12, X2 = 17.5, H = 6, R = 0.8, G = 9.8;
 const LANES = [-7.5, -4.5, -1.5, 1.5, 4.5, 7.5];
-const SLAB = { x: -10.5, top: 1.1 }, FLAG_X = 16, HOME = -1.6, VIS = 15, MAX_PENDING = 24;
-const smooth = (t) => t * t * (3 - 2 * t);
-const hill = (x) => (x <= X0 ? 0 : x >= X1 ? H : H * smooth((x - X0) / (X1 - X0)));
-const slope = (x) => { if (x <= X0 || x >= X1) return 0; const t = (x - X0) / (X1 - X0); return (H * 6 * t * (1 - t)) / (X1 - X0); };
-const MAX_SLOPE = (H * 1.5) / (X1 - X0);
-// The hill is a ridge across the lanes. In front it falls away so the camera sees its profile;
-// behind it, rolling country. The lanes stay smooth so boulders and feet sit on the ground.
-const S = THREE.MathUtils.smoothstep;
-function ground(x, z) {
-  const ridge = 1 - S(z, 10, 17);
-  const back = S(-z, 12, 30), front = S(z, 14, 26);
-  const n = Math.sin(x * 0.09 + z * 0.06) * 2.4 + Math.sin(x * 0.21 - z * 0.17) * 1.2 + Math.sin(z * 0.29 + 1.3) * 0.7;
-  const dunes = Math.sin(x * 0.23 + 0.7) * Math.sin(z * 0.31) * 0.5;
-  return hill(x) * ridge + back * (n + 3.5) + front * dunes + Math.sin(x * 1.7) * Math.sin(z * 1.3) * 0.03;
+const FLAG_X = 15, START_X = -0.6, VIS = 16, MAX_PENDING = 24;
+const SLAB = { x: -8.5, len: 4.4, wid: 4.6, tilt: 0.2, lift: 1.1 };
+
+function profile(x) {
+  if (x <= X0) return 0.07 * Math.min(-x, 10); // the meadow drains gently toward the foot of the hill
+  if (x <= X1) return H * S(x, X0, X1);
+  if (x <= X2) return H;
+  return H - H * 0.75 * S(x, X2, X2 + 10);
 }
+// The hill is a ridge across the lanes. In front it falls away so the camera sees its profile;
+// behind it, rolling country, and far off, mountains.
+function ground(x, z) {
+  const ridge = 1 - S(z, 10, 17), back = S(-z, 12, 30), front = S(z, 14, 26), far = S(Math.hypot(x - 4, z), 70, 260);
+  const hills = Math.sin(x * 0.09 + z * 0.06) * 2.4 + Math.sin(x * 0.21 - z * 0.17) * 1.2 + Math.sin(z * 0.29 + 1.3) * 0.7;
+  const peaks = Math.sin(x * 0.013 + 1.1) * Math.sin(z * 0.017 - 0.4) * 30 + Math.sin(x * 0.031 - z * 0.027) * 9;
+  const rough = Math.sin(x * 1.9) * Math.sin(z * 1.6) * 0.04 + Math.sin(x * 0.7 + z * 0.9) * Math.sin(z * 0.6 - x * 0.4) * 0.08;
+  return profile(x) * ridge + back * (hills + 3.5) + front * Math.sin(x * 0.23 + 0.7) * Math.sin(z * 0.31) * 0.5 + far * (peaks + 12) + rough;
+}
+const SLAB_TOP = profile(SLAB.x) + SLAB.lift, SLAB_TAN = Math.tan(SLAB.tilt);
+function slabTop(x, z) {
+  const dx = x - SLAB.x;
+  return Math.abs(dx) > SLAB.len / 2 || Math.abs(z) > SLAB.wid / 2 ? -Infinity : SLAB_TOP - dx * SLAB_TAN;
+}
+const floorAt = (x, z) => Math.max(ground(x, z), slabTop(x, z));
+function grad(x, z) {
+  const e = 0.05;
+  const gx = (floorAt(x + e, z) - floorAt(x - e, z)) / (2 * e), gz = (floorAt(x, z + e) - floorAt(x, z - e)) / (2 * e);
+  const m = Math.hypot(gx, gz);
+  return m > 1.5 ? [(gx * 1.5) / m, (gz * 1.5) / m] : [gx, gz]; // the slab's edge is a cliff, not a slope
+}
+// How worn the ground is: the lanes up the hill and the hollow where boulders wait.
+function wear(x, z) {
+  let lane = 0;
+  for (const l of LANES) lane = Math.max(lane, 1 - S(Math.abs(z - l), 0.35, 1.0));
+  lane *= S(x, -2, 0) * (1 - S(x, X2 + 2, X2 + 6));
+  const hollow = 1 - S(Math.hypot((x + 4) / 1.6, z / 1.3), 2.5, 6.5);
+  return Math.max(lane, hollow * 0.7);
+}
+// three's ACES filmic curve, so the fog can be set to exactly the sky's colour at the horizon.
+function aces(c, exposure) {
+  const k = exposure / 0.6, r = c.r * k, g = c.g * k, b = c.b * k;
+  const f = (v) => (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.432951) + 0.238081);
+  const x = f(0.59719 * r + 0.35458 * g + 0.04823 * b), y = f(0.076 * r + 0.90834 * g + 0.01566 * b), z = f(0.0284 * r + 0.13383 * g + 0.83777 * b);
+  return new THREE.Color(clamp(1.60475 * x - 0.53108 * y - 0.07367 * z, 0, 1), clamp(-0.10208 * x + 1.10813 * y - 0.00605 * z, 0, 1), clamp(-0.00327 * x - 0.07276 * y + 1.07602 * z, 0, 1));
+}
+function rng(seed) { return () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
 function fail(msg) {
   canvas.remove();
@@ -54,6 +90,7 @@ if (gl) start().catch((e) => {
 });
 
 async function start() {
+  const small = host.clientWidth < 700;
   gl.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   gl.toneMapping = THREE.ACESFilmicToneMapping;
   gl.shadowMap.enabled = true;
@@ -61,11 +98,9 @@ async function start() {
 
   const manager = new THREE.LoadingManager();
   manager.onProgress = (_url, done, total) => { if (hint) hint.textContent = `Loading the hill, ${done} of ${total} files`; };
-  const texLoader = new THREE.TextureLoader(manager);
-  const gltfLoader = new GLTFLoader(manager);
-  const rgbe = new RGBELoader(manager).setDataType(THREE.FloatType);
+  const texLoader = new THREE.TextureLoader(manager), gltfLoader = new GLTFLoader(manager);
   const [sky, rockGltf, soldier, tDiff, tNor, tRough] = await Promise.all([
-    rgbe.loadAsync(BASE + "sky_1k.hdr"),
+    new RGBELoader(manager).setDataType(THREE.FloatType).loadAsync(BASE + "sky_1k.hdr"),
     gltfLoader.loadAsync(BASE + "rock/rock_07_1k.gltf"),
     gltfLoader.loadAsync(BASE + "Soldier.glb"),
     texLoader.loadAsync(BASE + "terrain_rocky_terrain_02_diff_1k.jpg"),
@@ -73,204 +108,530 @@ async function start() {
     texLoader.loadAsync(BASE + "terrain_rocky_terrain_02_rough_1k.jpg"),
   ]);
 
-  // ---- Sky, light and atmosphere. Fog takes the HDRI's own horizon colour so land meets sky cleanly.
+  // ---- Sky. Spin the HDRI so its sun sits to the left of the hill, then put the shadow-casting sun
+  // exactly there. The sun's hot spot is clipped out of the sky used for ambient light, so shaded
+  // sides stay shaded instead of being lit a second time by the sky.
   const scene = new THREE.Scene();
+  const { data, width: W, height: HH } = sky.image;
+  let sunI = 0, sunL = 0;
+  for (let i = 0; i < W * HH; i++) { const l = data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]; if (l > sunL) { sunL = l; sunI = i; } }
+  const sunRow = Math.floor(sunI / W), sunCol = sunI % W, want = Math.atan2(-0.25, -0.85);
+  const shift = (((Math.round(((want / (2 * Math.PI) + 0.5) * W - 0.5 - sunCol)) % W) + W) % W);
+  const copy = data.slice();
+  for (let r = 0; r < HH; r++) for (let c = 0; c < W; c++) {
+    const from = (r * W + c) * 4, to = (r * W + ((c + shift) % W)) * 4;
+    let k = 1; const l = (copy[from] + copy[from + 1] + copy[from + 2]) / 3;
+    if (l > 6) k = 6 / l;
+    data[to] = copy[from] * k; data[to + 1] = copy[from + 1] * k; data[to + 2] = copy[from + 2] * k;
+  }
+  sky.needsUpdate = true;
+  const sunEl = Math.max(0.42, (0.5 - (sunRow + 0.5) / HH) * Math.PI);
+  const sunDir = V(Math.cos(want) * Math.cos(sunEl), Math.sin(sunEl), Math.sin(want) * Math.cos(sunEl));
+  const horizon = new THREE.Color(0, 0, 0);
+  { let n = 0; for (let r = Math.floor(HH * 0.478); r < Math.floor(HH * 0.497); r++) for (let c = 0; c < W; c++) { const i = (r * W + c) * 4; horizon.r += data[i]; horizon.g += data[i + 1]; horizon.b += data[i + 2]; n++; } horizon.multiplyScalar(1 / n); }
+
   sky.mapping = THREE.EquirectangularReflectionMapping;
   scene.background = sky;
   const pmrem = new THREE.PMREMGenerator(gl);
   scene.environment = pmrem.fromEquirectangular(sky).texture;
-  const horizon = (() => {
-    const { data, width, height } = sky.image, c = new THREE.Color(0, 0, 0);
-    const row = Math.floor(height * 0.47);
-    for (let x = 0; x < width; x++) { const i = (row * width + x) * 4; c.r += data[i]; c.g += data[i + 1]; c.b += data[i + 2]; }
-    return c.multiplyScalar(1 / width);
-  })();
-  scene.fog = new THREE.FogExp2(horizon.clone(), 0.005);
+  scene.fog = new THREE.FogExp2(0xffffff, 0.003);
 
-  const sun = new THREE.DirectionalLight(0xfff0dc, 3);
-  sun.position.set(-28, 42, 22);
-  sun.target.position.set(2, 0, 0);
+  const sun = new THREE.DirectionalLight(0xfff1de, 3.2);
+  sun.target.position.set(3, 2, 1);
+  sun.position.copy(sun.target.position).addScaledVector(sunDir, 70);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 22, bottom: -22, near: 5, far: 120 });
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.04;
+  Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 26, bottom: -26, near: 20, far: 130 });
+  sun.shadow.bias = -0.0003;
+  sun.shadow.normalBias = 0.03;
   scene.add(sun, sun.target);
 
-  // ---- Terrain: one heightfield with scanned rocky-ground textures.
-  for (const t of [tDiff, tNor, tRough]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(48, 32); t.anisotropy = gl.capabilities.getMaxAnisotropy(); }
+  // ---- Terrain: a detailed patch where things happen, a coarse one out to the mountains. UVs are in
+  // world units so the scanned ground texture has the same scale on both; worn ground is browner.
+  for (const t of [tDiff, tNor, tRough]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = gl.capabilities.getMaxAnisotropy(); }
   tDiff.colorSpace = THREE.SRGBColorSpace;
-  const tg = new THREE.PlaneGeometry(240, 160, 360, 240);
-  tg.rotateX(-Math.PI / 2);
-  const tp = tg.attributes.position;
-  for (let i = 0; i < tp.count; i++) tp.setY(i, ground(tp.getX(i), tp.getZ(i)));
-  tg.computeVertexNormals();
-  const terrain = new THREE.Mesh(tg, new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.3, 1.3) }));
-  terrain.receiveShadow = true;
-  scene.add(terrain);
+  const groundMat = new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true });
+  const NEAR = { x0: -34, x1: 46, z0: -30, z1: 26 };
+  const inNear = (x, z) => x > NEAR.x0 + 1 && x < NEAR.x1 - 1 && z > NEAR.z0 + 1 && z < NEAR.z1 - 1;
+  function terrain(w, d, cx, cz, step, sink) {
+    const g = new THREE.PlaneGeometry(w, d, Math.round(w / step), Math.round(d / step));
+    g.rotateX(-Math.PI / 2); g.translate(cx, 0, cz);
+    const p = g.attributes.position, uv = g.attributes.uv, col = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i), wr = wear(x, z) * 0.75;
+      p.setY(i, ground(x, z) - (sink && inNear(x, z) ? 0.8 : 0));
+      uv.setXY(i, x / 6, z / 6);
+      col[i * 3] = 1 - wr * 0.05; col[i * 3 + 1] = 1 - wr * 0.2; col[i * 3 + 2] = 1 - wr * 0.38;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, groundMat);
+    m.receiveShadow = true;
+    scene.add(m);
+  }
+  terrain(NEAR.x1 - NEAR.x0, NEAR.z1 - NEAR.z0, (NEAR.x0 + NEAR.x1) / 2, (NEAR.z0 + NEAR.z1) / 2, small ? 0.4 : 0.25, false);
+  terrain(1000, 1000, 4, 0, 6, true);
 
-  // ---- Boulders: the scanned rock, centred and sized to radius R. One geometry, a material per state.
+  // ---- Grass: tufts of blades that sway in the wind. Short and sparse where the ground is worn.
+  const grass = (() => {
+    const ys = [0, 0.35, 0.7, 1], ws = [0.5, 0.4, 0.24], pos = [], idx = [];
+    for (let k = 0; k < 3; k++) pos.push(-ws[k] / 2, ys[k], 0.25 * ys[k] ** 2, ws[k] / 2, ys[k], 0.25 * ys[k] ** 2);
+    pos.push(0, 1, 0.25);
+    for (const [a, b, c] of [[0, 1, 2], [1, 3, 2], [2, 3, 4], [3, 5, 4], [4, 5, 6]]) idx.push(a, b, c, a, c, b); // both sides
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(Array.from({ length: 7 }, () => [0, 1, 0]).flat(), 3));
+    g.setIndex(idx);
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.9 });
+    const uTime = { value: 0 };
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = uTime;
+      sh.vertexShader = "uniform float uTime;\nvarying float vH;\n" + sh.vertexShader
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvH = position.y;")
+        .replace("#include <project_vertex>", [
+          "vec4 mvPosition = vec4( transformed, 1.0 );",
+          "#ifdef USE_INSTANCING",
+          "mvPosition = instanceMatrix * mvPosition;",
+          "#endif",
+          "float ph = mvPosition.x * 0.31 + mvPosition.z * 0.23;",
+          "float gust = 0.5 + 0.5 * sin( uTime * 0.7 + mvPosition.x * 0.06 - mvPosition.z * 0.03 );",
+          "vec2 wind = vec2( sin( uTime * 1.9 + ph ) * 0.5 + gust * 1.1, cos( uTime * 1.4 + ph * 1.7 ) * 0.3 );",
+          "mvPosition.xz += wind * 0.13 * vH * vH;",
+          "mvPosition.y -= dot( wind, wind ) * 0.02 * vH * vH;",
+          "mvPosition = modelViewMatrix * mvPosition;",
+          "gl_Position = projectionMatrix * mvPosition;",
+        ].join("\n"));
+      sh.fragmentShader = "varying float vH;\n" + sh.fragmentShader
+        .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= mix( 0.3, 1.0, vH );");
+    };
+    const N = small ? 30000 : 72000, mesh = new THREE.InstancedMesh(g, mat, N), r = rng(7);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = V(), at = V(), c = new THREE.Color();
+    const palette = [new THREE.Color(0.06, 0.1, 0.02), new THREE.Color(0.1, 0.14, 0.03), new THREE.Color(0.16, 0.16, 0.05), new THREE.Color(0.12, 0.13, 0.035)];
+    let n = 0;
+    while (n < N) {
+      const cx = -20 + r() * 50, cz = -16 + r() * 40;
+      if (slabTop(cx, cz) > -Infinity) continue;
+      const wr = wear(cx, cz), tall = (0.18 + r() * 0.42) * (1 - wr * 0.85), base = palette[Math.floor(r() * palette.length)];
+      if (wr > 0.6 && r() < 0.6) continue;
+      for (let k = 0; k < 9 && n < N; k++, n++) {
+        const x = cx + (r() - 0.5) * 0.45, z = cz + (r() - 0.5) * 0.45;
+        at.set(x, ground(x, z) - 0.02, z);
+        q.setFromAxisAngle(UP, r() * Math.PI * 2);
+        const s = 0.06 + r() * 0.04;
+        sc.set(s, tall * (0.6 + r() * 0.5), s);
+        mesh.setMatrixAt(n, m4.compose(at, q, sc));
+        mesh.setColorAt(n, c.copy(base).multiplyScalar(0.85 + r() * 0.3));
+      }
+    }
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    return { mesh, uTime, N };
+  })();
+
+  // ---- The scanned rock, centred and evened out from a tall shard into a boulder of radius R.
   let rockMesh;
   rockGltf.scene.traverse((o) => { if (o.isMesh && !rockMesh) rockMesh = o; });
   const rockGeo = rockMesh.geometry.clone();
   rockGeo.computeBoundingBox();
-  const bb = rockGeo.boundingBox, size = bb.getSize(new THREE.Vector3()), mid = bb.getCenter(new THREE.Vector3());
-  rockGeo.translate(-mid.x, -mid.y, -mid.z);
-  rockGeo.scale((2 * R) / size.x, (2 * R) / size.y, (2 * R) / size.z); // the scan is a tall shard; even it out into a boulder
+  { const bb = rockGeo.boundingBox, size = bb.getSize(V()), mid = bb.getCenter(V()); rockGeo.translate(-mid.x, -mid.y, -mid.z); rockGeo.scale((2 * R) / size.x, (2 * R) / size.y, (2 * R) / size.z); }
   const rockMat = rockMesh.material;
-  const glowMat = (key) => { const m = rockMat.clone(); m.emissive = new THREE.Color(); m.userData.glow = key; return m; };
-  const MAT = { rock: rockMat, warn: glowMat("warn"), accent: glowMat("accent"), bad: glowMat("bad") };
+  // The scan reads wet in full sun: keep it matte, and a touch greyer so the amber retry tint stands out.
+  const matte = (m) => { m.envMapIntensity = 0.6; m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = max( roughnessFactor, 0.8 );"); }; return m; };
+  matte(rockMat).color.setRGB(0.9, 0.93, 1);
+  // A few hundred surface points, used to find which part of a tumbling rock touches the ground.
+  const hull = [];
+  { const p = rockGeo.attributes.position, step = Math.max(1, Math.floor(p.count / 300)); for (let i = 0; i < p.count; i += step) hull.push(p.getX(i), p.getY(i), p.getZ(i)); }
 
-  // Postgres: a cut stone block every boulder lands on first.
-  const slabMat = new THREE.MeshStandardMaterial({ map: rockMat.map, normalMap: rockMat.normalMap, roughness: 0.85 });
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(3.6, SLAB.top, 4.4), slabMat);
-  slab.position.set(SLAB.x, SLAB.top / 2 + ground(SLAB.x, 0) - 0.05, 0);
+  // Outcrops on the hillsides and loose stones in the grass, so the hill isn't a lawn.
+  {
+    const r = rng(3), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    const big = [[3.5, -10.8], [8.5, -11.5], [12, -10.6], [-12.5, -7], [-15, 7.5], [21, 9], [22, -6], [-3, -12.5]];
+    const outcrops = new THREE.InstancedMesh(rockGeo, rockMat, big.length);
+    big.forEach(([x, z], i) => {
+      const s = 0.9 + r() * 1.1;
+      e.set(r() * 6, r() * 6, r() * 6);
+      outcrops.setMatrixAt(i, m4.compose(V(x, ground(x, z) + R * s * 0.25, z), q.setFromEuler(e), V(s * (0.9 + r() * 0.5), s * (0.6 + r() * 0.3), s * (0.9 + r() * 0.5))));
+    });
+    outcrops.castShadow = outcrops.receiveShadow = true;
+    const pebbleGeo = new THREE.SphereGeometry(1, 18, 12); // bumps depend on position only, so the seam stays closed
+    { const p = pebbleGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 0.8 + 0.35 * (0.5 + 0.5 * Math.sin(p.getX(i) * 12.9 + p.getY(i) * 78.2 + p.getZ(i) * 37.7)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.7, p.getZ(i) * k); } pebbleGeo.computeVertexNormals(); }
+    const pebbles = new THREE.InstancedMesh(pebbleGeo, new THREE.MeshStandardMaterial({ map: rockMat.map, normalMap: rockMat.normalMap, roughness: 0.9, color: 0xb5ada3 }), 70);
+    for (let i = 0; i < 70; i++) {
+      let x, z;
+      do { x = -18 + r() * 44; z = -14 + r() * 30; } while (wear(x, z) > 0.3 || slabTop(x, z) > -Infinity);
+      const s = 0.08 + r() ** 2 * 0.3;
+      pebbles.setMatrixAt(i, m4.compose(V(x, ground(x, z) + s * 0.2, z), q.setFromAxisAngle(UP, r() * 6), V(s, s, s)));
+    }
+    pebbles.receiveShadow = true;
+    scene.add(outcrops, pebbles);
+  }
+
+  // Postgres: a tilted slab of stone. Boulders land on it and roll off into the hollow.
+  const slabTex = (t) => { const c = t.clone(); c.repeat.set(1.2, 1.2); c.needsUpdate = true; return c; };
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(SLAB.len, 2.4, SLAB.wid), new THREE.MeshStandardMaterial({ map: slabTex(tDiff), normalMap: slabTex(tNor), color: 0x8f8a82, roughness: 0.95 }));
+  slab.rotation.z = -SLAB.tilt;
+  slab.position.set(SLAB.x - Math.sin(SLAB.tilt) * 1.2, SLAB_TOP - Math.cos(SLAB.tilt) * 1.2, 0);
   slab.castShadow = slab.receiveShadow = true;
   scene.add(slab);
 
   // The webhook: a flag on the plateau. The cloth ripples, harder when a job lands.
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 4.2, 12), new THREE.MeshStandardMaterial({ color: 0x3a342e, roughness: 0.7 }));
-  pole.position.set(FLAG_X, H + 2.1, 0);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 4.2, 12), new THREE.MeshStandardMaterial({ color: 0x3a342e, roughness: 0.6, metalness: 0.3 }));
+  pole.position.set(FLAG_X, H + 2.05, 0);
   pole.castShadow = true;
   const flagGeo = new THREE.PlaneGeometry(2.0, 1.25, 24, 10);
   flagGeo.translate(1.0, 0, 0);
   const flagX = Array.from({ length: flagGeo.attributes.position.count }, (_, i) => flagGeo.attributes.position.getX(i));
-  const flagMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.8, emissive: new THREE.Color() });
+  const flagMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, emissive: new THREE.Color() });
   flagMat.userData.glow = "accent";
   const flag = new THREE.Mesh(flagGeo, flagMat);
-  flag.position.set(FLAG_X + 0.06, H + 3.55, 0);
+  flag.position.set(FLAG_X + 0.05, H + 3.5, 0);
   flag.castShadow = true;
   scene.add(pole, flag);
 
-  // Dust: a small pool of soft sprites for landings and slips.
+  // Dust: soft sprites for landings, slips and fast rolling.
   const dustTex = (() => {
     const c = document.createElement("canvas"); c.width = c.height = 64;
     const g = c.getContext("2d"), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    r.addColorStop(0, "rgba(255,255,255,0.9)"); r.addColorStop(1, "rgba(255,255,255,0)");
+    r.addColorStop(0, "rgba(255,255,255,0.8)"); r.addColorStop(1, "rgba(255,255,255,0)");
     g.fillStyle = r; g.fillRect(0, 0, 64, 64);
     return new THREE.CanvasTexture(c);
   })();
-  const dust = Array.from({ length: 48 }, () => {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dustTex, color: 0xb8a58c, transparent: true, opacity: 0, depthWrite: false }));
-    s.userData = { life: 0, v: new THREE.Vector3() };
+  const dust = Array.from({ length: 64 }, () => {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dustTex, color: 0xa89478, transparent: true, opacity: 0, depthWrite: false }));
+    s.userData = { life: 0, v: V(), a: 0.4 };
     scene.add(s);
     return s;
   });
   let dustI = 0;
-  function puff(x, y, z, n = 6) {
+  function puff(x, y, z, n, strength = 1) {
     for (let k = 0; k < n; k++) {
-      const s = dust[dustI++ % dust.length];
-      s.position.set(x + (Math.random() - 0.5), y + 0.2, z + (Math.random() - 0.5));
-      s.userData.life = 1;
-      s.userData.v.set((Math.random() - 0.5) * 2.2, 0.6 + Math.random() * 0.8, (Math.random() - 0.5) * 2.2);
-      s.scale.setScalar(0.6);
+      const s = dust[dustI++ % dust.length], u = s.userData;
+      s.position.set(x + (Math.random() - 0.5) * 1.2, y + 0.15, z + (Math.random() - 0.5) * 1.2);
+      u.life = 1; u.a = Math.min(0.55, 0.18 + strength * 0.06);
+      u.v.set((Math.random() - 0.5) * 2, 0.4 + Math.random() * 0.7, (Math.random() - 0.5) * 2);
+      s.scale.setScalar(0.5);
     }
   }
 
-  // ---- Workers: the rigged Soldier, cloned per lane, with idle, walk and run blended by weight.
+  // ---- Boulders.
+  const tintMat = (key) => { const m = matte(rockMat.clone()); m.emissive = new THREE.Color(); m.userData.glow = key; return m; };
+  const MAT = { rock: rockMat, warn: tintMat("warn"), accent: tintMat("accent"), bad: tintMat("bad") };
+  const stones = [];
+  let seq = 0;
+  const _q = new THREE.Quaternion(), _ax = V();
+  function support(b) {
+    const { x, y, z, w } = b.m.quaternion, s = b.m.scale;
+    const m10 = 2 * (x * y + w * z), m11 = 1 - 2 * (x * x + z * z), m12 = 2 * (y * z - w * x);
+    let low = 0;
+    for (let i = 0; i < hull.length; i += 3) low = Math.min(low, m10 * hull[i] * s.x + m11 * hull[i + 1] * s.y + m12 * hull[i + 2] * s.z);
+    b.lift = -low;
+  }
+  function roll(b, dx, dz) {
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-6) return;
+    b.m.quaternion.premultiply(_q.setFromAxisAngle(_ax.set(dz / d, 0, -dx / d), d / b.r));
+    support(b);
+  }
+  function boulder() {
+    const m = new THREE.Mesh(rockGeo, MAT.rock);
+    m.castShadow = m.receiveShadow = true;
+    m.quaternion.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
+    m.scale.set(0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22);
+    scene.add(m);
+    const b = { m, p: m.position, v: V(), r: R * (m.scale.x + m.scale.y + m.scale.z) / 3, lift: R, air: true, held: false, claimed: false, dead: false, seq: seq++, gone: false };
+    support(b);
+    stones.push(b);
+    return b;
+  }
+  function drop() {
+    const b = boulder();
+    b.p.set(SLAB.x - 1 + Math.random() * 1.4, 9 + Math.random() * 2, (Math.random() - 0.5) * 2.6);
+    b.v.set(0, -2, 0);
+  }
+  function remove(b) { b.gone = true; scene.remove(b.m); stones.splice(stones.indexOf(b), 1); }
+  const waiting = (b) => !b.gone && !b.held && !b.claimed && !b.dead && !b.out && b.fade === undefined;
+
+  // Rolling physics for every boulder nobody is holding: gravity along the slope, rolling friction,
+  // bounces, leaving the ground over an edge, and knocking into each other.
+  function physics(b, dt) {
+    const p = b.p, v = b.v;
+    if (b.air) {
+      v.y -= G * dt;
+      p.addScaledVector(v, dt);
+      roll(b, v.x * dt * 0.4, v.z * dt * 0.4);
+      const f = floorAt(p.x, p.z) + b.lift;
+      if (p.y <= f) {
+        const [gx, gz] = grad(p.x, p.z), vg = gx * v.x + gz * v.z, hit = vg - v.y;
+        p.y = f;
+        if (hit > 3) { v.y = vg + hit * 0.2; v.x *= 0.8; v.z *= 0.8; puff(p.x, f - b.lift, p.z, 6, hit); }
+        else { b.air = false; v.y = vg; if (hit > 1.2) puff(p.x, f - b.lift, p.z, 3, hit); }
+      }
+      return;
+    }
+    const [gx, gz] = grad(p.x, p.z), k = ((5 / 7) * G) / Math.sqrt(1 + gx * gx + gz * gz);
+    v.x -= gx * k * dt; v.z -= gz * k * dt;
+    const mu = slabTop(p.x, p.z) > ground(p.x, p.z) ? 0.07 : 0.17;
+    let sp = Math.hypot(v.x, v.z);
+    if (sp > 0) { const ns = Math.max(0, sp - (mu * G + 0.06 * sp * sp) * dt); v.x *= ns / sp; v.z *= ns / sp; sp = ns; }
+    if (sp < 0.04 && Math.hypot(gx, gz) * k < mu * G) { v.x = v.z = 0; b.rest = (b.rest || 0) + dt; return; }
+    b.rest = 0;
+    const nx = p.x + v.x * dt, nz = p.z + v.z * dt;
+    if (floorAt(nx, nz) + b.lift > p.y + 0.3) { v.x *= -0.3; v.z *= -0.3; return; } // the slab's edge is a wall
+    const vg = gx * v.x + gz * v.z;
+    roll(b, nx - p.x, nz - p.z);
+    p.x = nx; p.z = nz;
+    const fy = floorAt(nx, nz) + b.lift;
+    if (fy < p.y + vg * dt - 0.06) { b.air = true; v.y = vg; p.y += vg * dt; } // the ground drops away faster than it rolls
+    else {
+      p.y = fy; v.y = vg;
+      if (sp > 3.5 && Math.random() < dt * 2) { b.air = true; v.y = vg + 0.6 + Math.random() * 1.2; }
+    }
+    if (sp > 2.5 && Math.random() < dt * 5) puff(p.x, fy - b.lift, p.z, 1, sp * 0.5);
+  }
+  const _n = V();
+  function collide() {
+    for (let i = 0; i < stones.length; i++) for (let j = i + 1; j < stones.length; j++) {
+      const a = stones[i], b = stones[j];
+      if (a.held && b.held) continue;
+      _n.subVectors(b.p, a.p);
+      const min = (a.r + b.r) * 0.9, d2 = _n.lengthSq();
+      if (d2 >= min * min) continue;
+      const d = Math.sqrt(d2) || 1e-4, over = min - d;
+      _n.multiplyScalar(1 / d);
+      const wa = a.held ? 0 : b.held ? 1 : 0.5, wb = b.held ? 0 : a.held ? 1 : 0.5;
+      for (const [s, w, sign] of [[a, wa, -1], [b, wb, 1]]) {
+        if (!w) continue;
+        s.p.x += sign * _n.x * over * w; s.p.z += sign * _n.z * over * w;
+        if (s.air) s.p.y += sign * _n.y * over * w;
+        s.rest = 0;
+      }
+      const rv = (b.v.x - a.v.x) * _n.x + (b.v.y - a.v.y) * _n.y + (b.v.z - a.v.z) * _n.z;
+      if (rv < 0) {
+        const jn = (-(1 + 0.25) * rv) / (wa + wb);
+        a.v.addScaledVector(_n, -jn * wa); b.v.addScaledVector(_n, jn * wb);
+      }
+    }
+  }
+  function carry(b, d, speed, dt) {
+    const dx = d.x * speed * dt, dz = d.z * speed * dt;
+    roll(b, dx, dz);
+    b.p.x += dx; b.p.z += dz;
+    b.p.y = floorAt(b.p.x, b.p.z) + b.lift;
+    b.v.set(d.x * speed, 0, d.z * speed);
+  }
+
+  // ---- Workers: the rigged Soldier, one per lane. Walk and run play at the speed the body moves, so
+  // feet don't skate. Pushing leans the whole body into the rock and plants both hands on it.
   const clip = (name) => soldier.animations.find((a) => a.name === name);
-  const FWD = Math.PI; // the Soldier faces -z
-  const faceTo = (dx, dz) => Math.atan2(dx, dz) - FWD;
-  function worker(z, i) {
+  function natural(name, fallback) {
+    const root = soldier.scene, mixer = new THREE.AnimationMixer(root), act = mixer.clipAction(clip(name));
+    act.play();
+    const feet = ["mixamorigLeftFoot", "mixamorigRightFoot"].map((n) => root.getObjectByName(n)), N = 90, dur = act.getClip().duration, tracks = [[], []];
+    for (let i = 0; i <= N; i++) { mixer.setTime((i / N) * dur); root.updateMatrixWorld(true); feet.forEach((f, k) => tracks[k].push(f.getWorldPosition(V()))); }
+    mixer.stopAllAction(); mixer.uncacheRoot(root);
+    const speeds = [];
+    for (const P of tracks) {
+      const low = Math.min(...P.map((p) => p.y));
+      for (let i = 1; i < P.length; i++) if (P[i].y < low + 0.03 && P[i - 1].y < low + 0.03) speeds.push(Math.abs(P[i].z - P[i - 1].z) / (dur / N));
+    }
+    speeds.sort((a, b) => a - b);
+    const s = speeds[speeds.length >> 1] || 0;
+    return s > 0.3 && s < 8 ? s : fallback;
+  }
+  const WALK = natural("Walk", 1.4), RUN = natural("Run", 3.6);
+  soldier.scene.updateMatrixWorld(true);
+  const bonePos = (n) => soldier.scene.getObjectByName("mixamorig" + n).getWorldPosition(V());
+  const SH = clamp(bonePos("LeftArm").y, 1.2, 1.7);
+  const ARM = clamp(bonePos("LeftArm").distanceTo(bonePos("LeftForeArm")) + bonePos("LeftForeArm").distanceTo(bonePos("LeftHand")), 0.4, 0.8);
+  const faceTo = (dx, dz) => Math.atan2(-dx, -dz); // the Soldier faces -z
+  const steepness = (x, z, d) => { const [gx, gz] = grad(x, z); return Math.atan(gx * d.x + gz * d.z); };
+
+  function worker(lane, i) {
     const model = cloneSkinned(soldier.scene);
     model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
-    const mixer = new THREE.AnimationMixer(model);
-    const acts = {};
+    const mixer = new THREE.AnimationMixer(model), acts = {};
     for (const n of ["Idle", "Walk", "Run"]) { const a = mixer.clipAction(clip(n)); a.play(); a.setEffectiveWeight(n === "Idle" ? 1 : 0); a.time = Math.random() * a.getClip().duration; acts[n] = a; }
     const bone = (n) => model.getObjectByName("mixamorig" + n);
+    const home = V(-3.4 + i * 1.15 + Math.random() * 0.3, 0, 10.2 + (i % 2) * 1.3 + Math.random() * 0.4);
     const w = {
-      model, mixer, acts, z, x: HOME, zz: z + 1.4, state: "idle", b: null, ev: null, t: 0,
-      weights: { Idle: 1, Walk: 0, Run: 0 }, target: { Idle: 1, Walk: 0, Run: 0 }, speed: 0, face: faceTo(1, 0), pose: "none", poseW: 0, lean: 0,
-      bones: { spine: bone("Spine1"), neck: bone("Neck"), lArm: bone("LeftArm"), rArm: bone("RightArm"), lFore: bone("LeftForeArm"), rFore: bone("RightForeArm") },
+      model, mixer, acts, lane, home, x: home.x, z: home.z, face: faceTo(-4 - home.x, -home.z) + (Math.random() - 0.5) * 0.8,
+      spd: 0, lean: 0, leanT: 0, poseW: 0, poseT: 0, scrabble: false, state: "idle", t: 0, b: null, ev: null, d: V(1, 0, 0), up: false,
+      bones: { neck: bone("Neck"), arms: [["LeftArm", "LeftForeArm", "LeftHand"], ["RightArm", "RightForeArm", "RightHand"]].map((a) => a.map(bone)) },
     };
-    model.position.set(w.x, ground(w.x, w.zz), w.zz);
-    model.rotation.y = w.face + (i % 2 ? 0.3 : -0.3);
     scene.add(model);
     return w;
   }
   const workers = LANES.map(worker);
 
-  // Bend one bone so its length axis (+y for Mixamo bones) points along a world direction.
-  const _q = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _d = new THREE.Vector3(), _t = new THREE.Quaternion();
-  const UP = new THREE.Vector3(0, 1, 0);
-  function aim(b, dir, k) {
-    b.getWorldQuaternion(_q);
-    _d.set(0, 1, 0).applyQuaternion(_q);
-    _t.setFromUnitVectors(_d, dir).multiply(_q);
-    b.parent.getWorldQuaternion(_pq);
-    b.quaternion.slerp(_pq.invert().multiply(_t), k);
-    b.updateMatrixWorld(true);
+  // Walk toward a point, easing in and out; returns true on arrival.
+  function walkTo(w, tx, tz, top, dt) {
+    const dx = tx - w.x, dz = tz - w.z, d = Math.hypot(dx, dz);
+    const want = Math.min(top, d * 1.6);
+    w.spd += clamp(want - w.spd, -4 * dt, 2.5 * dt);
+    if (d > 0.02) {
+      const st = Math.min(d, w.spd * dt);
+      w.x += (dx / d) * st; w.z += (dz / d) * st;
+      if (d > 0.25) w.face = faceTo(dx, dz);
+    }
+    return d < 0.1;
   }
-  const _f = new THREE.Vector3(), _s = new THREE.Vector3(), _a = new THREE.Vector3();
-  function overlayPose(w) {
-    if (w.poseW < 0.01) return;
-    const B = w.bones, k = w.poseW;
-    w.model.updateMatrixWorld(true);
-    if (w.pose === "push") {
-      const ang = Math.atan(slope(w.x + 1.2));
-      _f.set(Math.cos(ang), Math.sin(ang), 0);
-      aim(B.spine, _a.copy(UP).multiplyScalar(Math.cos(w.lean)).addScaledVector(_f, Math.sin(w.lean)).normalize(), k);
-      for (const [arm, fore, side] of [[B.lArm, B.lFore, -1], [B.rArm, B.rFore, 1]]) {
-        _s.copy(_f).add(new THREE.Vector3(0, -0.12, side * 0.18)).normalize();
-        aim(arm, _s, k); aim(fore, _s, k * 0.9);
+  // Where to stand so the shoulders are an arm's length from the rock, leaning `lean` into it.
+  const _f = V();
+  function stance(b, d, lean) {
+    const goal = b.r + ARM * 0.72, sl = Math.sin(lean) * SH, cl = Math.cos(lean) * SH; // hands on the rock, elbows a little bent
+    let lo = 0.3, hi = 3.6;
+    for (let k = 0; k < 14; k++) {
+      const s = (lo + hi) / 2, fx = b.p.x - d.x * s, fz = b.p.z - d.z * s, fy = ground(fx, fz);
+      if (Math.hypot(fx + d.x * sl - b.p.x, fy + cl - b.p.y, fz + d.z * sl - b.p.z) < goal) lo = s; else hi = s;
+    }
+    const s = (lo + hi) / 2;
+    return _f.set(b.p.x - d.x * s, 0, b.p.z - d.z * s);
+  }
+  const leanFor = (b, d) => 0.25 + 0.7 * Math.max(0, steepness(b.p.x, b.p.z, d));
+
+  let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null;
+  const _d = V();
+  function pushDir(w, b) {
+    if (!w.up) {
+      _d.set(START_X - b.p.x, 0, w.lane - b.p.z);
+      if (_d.length() < 0.2) w.up = true; else return _d.normalize();
+    }
+    return _d.set(1, 0, (w.lane - b.p.z) * 0.6).normalize();
+  }
+  function stepWorker(w, dt) {
+    const b = w.b;
+    w.poseT = 0; w.leanT = 0; w.scrabble = false;
+    if (b && b.gone) { w.b = null; w.state = "return"; return; }
+    if (w.state === "idle") {
+      walkTo(w, w.home.x, w.home.z, 1.2, dt);
+    } else if (w.state === "return") {
+      if (walkTo(w, w.home.x, w.home.z, pending.length > 4 ? RUN * 0.85 : WALK, dt)) w.state = "idle";
+    } else if (w.state === "go") {
+      const d = pushDir(w, b), f = stance(b, d, leanFor(b, d));
+      if (walkTo(w, f.x, f.z, pending.length > 6 ? RUN * 0.8 : WALK * 1.1, dt)) { w.state = "brace"; w.t = 0; b.held = true; }
+    } else if (w.state === "brace" || w.state === "push" || w.state === "strain") {
+      const d = pushDir(w, b), lean = leanFor(b, d);
+      w.d.copy(d); w.poseT = 1; w.leanT = lean;
+      let speed = 0;
+      if (w.state === "brace") { w.t += dt; if (w.t > 0.5) w.state = "push"; }
+      else if (w.state === "push") {
+        const steep = clamp(steepness(b.p.x, b.p.z, d) / 0.7, 0, 1);
+        speed = 0.95 * (1 + Math.min(pending.length, 20) / 30) * (1 - 0.45 * steep);
+        if (w.up && b.p.x >= w.goal) {
+          if (w.ev === "ok") { b.held = false; b.out = true; b.air = false; b.v.set(2.6, 0, 0); w.state = "rest"; w.t = 1.4; w.b = null; }
+          else { w.state = "strain"; w.t = 0.9; }
+        }
+        if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; }
+      } else { // strain: legs scrabble, the rock rocks, then it gets away from them
+        w.t -= dt; w.scrabble = true;
+        speed = Math.sin(w.t * 18) * 0.25;
+        if (w.t <= 0) {
+          b.held = false; b.claimed = false; b.air = false; b.v.set(-0.4, 0, 0);
+          if (w.ev === "dead") { b.dead = true; b.v.z = 1.6; b.m.material = MAT.bad; deadQueue.push(b); }
+          else { b.m.material = MAT.warn; slipped++; }
+          w.state = "dodge"; w.t = 0.7; w.side = w.lane > 6 ? -1 : 1; w.b = null; w.watch = b;
+        }
       }
-      aim(B.neck, _a.copy(UP).addScaledVector(_f, 0.5).normalize(), k * 0.6);
-    } else if (w.pose === "cheer") {
-      for (const [arm, fore, side] of [[B.lArm, B.lFore, -1], [B.rArm, B.rFore, 1]]) {
-        _s.set(0.1, 1, side * 0.35).normalize();
-        aim(arm, _s, k); aim(fore, _s, k);
+      if (w.b) {
+        w.spd += (Math.abs(speed) - w.spd) * Math.min(1, dt * 6);
+        carry(b, d, w.state === "strain" ? speed : w.spd, dt);
+        const f = stance(b, d, w.lean);
+        if (w.state === "brace") { w.x += (f.x - w.x) * Math.min(1, dt * 8); w.z += (f.z - w.z) * Math.min(1, dt * 8); }
+        else { w.x = f.x; w.z = f.z; }
+        w.face = faceTo(d.x, d.z);
       }
+    } else if (w.state === "dodge") { // jump clear of the rolling rock
+      w.t -= dt;
+      walkTo(w, w.x, w.z + w.side * 3, RUN * 0.9, dt);
+      if (w.t <= 0) { w.state = "watch"; w.t = 1; }
+    } else if (w.state === "watch" || w.state === "rest") {
+      w.t -= dt;
+      w.spd = Math.max(0, w.spd - dt * 4);
+      const o = w.watch && !w.watch.gone ? w.watch.p : V(X2 + 4, 0, w.lane);
+      if (w.state === "watch") w.face = faceTo(o.x - w.x, o.z - w.z);
+      if (w.t <= 0) { w.state = "return"; w.watch = null; }
     }
   }
 
-  // ---- HTML labels pinned to points in the world.
-  const tags = [["API", SLAB.x, 11, 0], ["Postgres", SLAB.x, 0, 3.2], ["Queue", -5, 0, 6.2], ["Workers", 6.5, hill(6.5) + 3.6, -9.5], ["Your webhook", FLAG_X, H + 5.2, 0]]
-    .map(([text, x, y, z]) => { const el = document.createElement("div"); el.className = "tag"; el.textContent = text; host.appendChild(el); return { el, v: new THREE.Vector3(x, y, z) }; });
-
-  // ---- Boulders and the line.
-  const stones = [], queue = [];
-  let pending = [], spawnLeft = 0, spawnT = 0, inbound = 0, delivered = 0, slipped = 0, base0 = null;
-  const _roll = new THREE.Quaternion(), ZAX = new THREE.Vector3(0, 0, 1), XAX = new THREE.Vector3(1, 0, 0);
-  const roll = (b, dx, axis = ZAX) => { b.m.quaternion.premultiply(_roll.setFromAxisAngle(axis, -dx / R)); };
-  function slot(i) {
-    i = Math.min(i, VIS - 1);
-    const row = i % 5, col = Math.floor(i / 5), x = -3 - col * 1.9, z = (row - 2) * 2.3 + (col % 2) * 0.6;
-    return new THREE.Vector3(x, ground(x, z) + R, z);
+  // Bone helpers for the pushing pose, all in world space so they don't care about bone axes.
+  const _a = V(), _b = V(), _c = V(), _e = V(), _t = V(), _p = V(), _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+  function aimChild(bone, child, goal, k) { // rotate `bone` so that `child` moves toward `goal`
+    bone.getWorldPosition(_p);
+    child.getWorldPosition(_c);
+    _qa.setFromUnitVectors(_c.sub(_p).normalize(), _t.copy(goal).sub(_p).normalize());
+    bone.getWorldQuaternion(_qb);
+    _qa.multiply(_qb);
+    bone.parent.getWorldQuaternion(_qb);
+    bone.quaternion.slerp(_qb.invert().multiply(_qa), k);
+    bone.updateMatrixWorld(true);
   }
-  function stone(at) {
-    const m = new THREE.Mesh(rockGeo, MAT.rock);
-    m.castShadow = m.receiveShadow = true;
-    m.position.copy(at);
-    m.quaternion.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
-    m.scale.setScalar(0.9 + Math.random() * 0.2);
-    scene.add(m);
-    const b = { m, state: "new", t: 0, v: 0 };
-    stones.push(b);
-    return b;
+  function reach([upper, lower, hand], target, pole, k) { // two-bone IK
+    upper.getWorldPosition(_a); lower.getWorldPosition(_b); hand.getWorldPosition(_c);
+    const la = _a.distanceTo(_b), lb = _b.distanceTo(_c);
+    _t.subVectors(target, _a);
+    const dist = clamp(_t.length(), Math.abs(la - lb) + 0.01, (la + lb) * 0.98);
+    _t.normalize();
+    const cos = (la * la + dist * dist - lb * lb) / (2 * la * dist), sin = Math.sqrt(Math.max(0, 1 - cos * cos));
+    const bend = _e.copy(pole).addScaledVector(_t, -pole.dot(_t)).normalize();
+    const elbow = V().copy(_a).addScaledVector(_t, la * cos).addScaledVector(bend, la * sin);
+    const wrist = V().copy(_a).addScaledVector(_t, dist);
+    aimChild(upper, lower, elbow, k);
+    aimChild(lower, hand, wrist, k);
   }
-  const tint = (b, key) => { b.m.material = MAT[key]; };
-  const join = (b) => { b.state = "q"; queue.push(b); };
-  function kill(b, i) { scene.remove(b.m); stones.splice(i, 1); }
-  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-
-  function spawn() {
-    if (queue.length + inbound >= VIS) { const h = stone(slot(VIS)); h.m.visible = false; join(h); return; }
-    const b = stone(new THREE.Vector3(SLAB.x + (Math.random() - 0.5) * 1.5, 13, (Math.random() - 0.5) * 2));
-    b.state = "drop"; b.v = 0; inbound++;
+  function turnWorld(bone, axis, angle) {
+    bone.getWorldQuaternion(_qb);
+    _qa.setFromAxisAngle(axis, angle).multiply(_qb);
+    bone.parent.getWorldQuaternion(_qb);
+    bone.quaternion.copy(_qb.invert().multiply(_qa));
+    bone.updateMatrixWorld(true);
+  }
+  const _r = V(), _sh = V(), _nk = V(), _goal = V(), _pole = V(), qYaw = new THREE.Quaternion(), qLean = new THREE.Quaternion();
+  function animate(w, dt) {
+    const s = w.spd, idle = clamp(1 - s / 0.45, 0, 1), run = S(s, WALK * 1.25, RUN * 0.75);
+    const weights = w.scrabble ? { Idle: 0, Walk: 1, Run: 0 } : { Idle: idle, Walk: (1 - idle) * (1 - run), Run: (1 - idle) * run };
+    for (const n in weights) w.acts[n].setEffectiveWeight(weights[n]);
+    w.acts.Walk.timeScale = w.scrabble ? 0.9 : clamp(s / WALK, 0.35, 1.7);
+    w.acts.Run.timeScale = clamp(s / RUN, 0.6, 1.4);
+    w.mixer.update(dt);
+    w.lean += (w.leanT - w.lean) * Math.min(1, dt * 5);
+    w.poseW += (w.poseT - w.poseW) * Math.min(1, dt * 6);
+    w.model.position.set(w.x, ground(w.x, w.z), w.z);
+    const cur = Math.atan2(Math.sin(w.face - (w.yaw ?? w.face)), Math.cos(w.face - (w.yaw ?? w.face)));
+    w.yaw = (w.yaw ?? w.face) + cur * Math.min(1, dt * 7);
+    w.model.quaternion.copy(qYaw.setFromAxisAngle(UP, w.yaw)).multiply(qLean.setFromAxisAngle(XAX, -w.lean));
+    w.model.updateMatrixWorld(true);
+    const b = w.b;
+    if (w.poseW < 0.02 || !b) return;
+    const d = w.d, k = w.poseW;
+    _r.crossVectors(d, UP).normalize();
+    turnWorld(w.bones.neck, _r, w.lean * 0.55 * k); // keep looking up the hill, not at the dirt
+    w.bones.neck.getWorldPosition(_nk);
+    for (const arm of w.bones.arms) {
+      arm[0].getWorldPosition(_sh);
+      const side = Math.sign(_sh.sub(_nk).dot(_r)) || 1;
+      _goal.copy(b.p).addScaledVector(d, -b.r * 0.92).addScaledVector(_r, side * 0.28).addScaledVector(UP, 0.18);
+      _pole.copy(UP).multiplyScalar(-1).addScaledVector(_r, side * 0.7).addScaledVector(d, -0.3);
+      reach(arm, _goal, _pole, k);
+    }
   }
 
-  // A free worker takes the boulder at the head of the line and the next real event (ok, fail or dead).
+  // A free worker takes the oldest boulder that has come to rest, and the next real event.
   function dispatch() {
     for (const w of workers) {
-      if (w.state !== "idle" || !pending.length) continue;
-      let b = queue.shift();
-      if (!b) { if (inbound > 0) return; b = stone(slot(0)); } // the picture fell behind the real queue
-      b.m.visible = true; b.m.scale.setScalar(1);
-      b.state = "fetch"; b.t = 0; b.from = b.m.position.clone();
-      b.to = new THREE.Vector3(0.9, ground(0.9, w.z) + R, w.z);
-      w.b = b; w.ev = pending.shift(); w.state = "wait";
+      if (!pending.length) return;
+      if (w.state !== "idle" && w.state !== "return") continue;
+      let b = null;
+      for (const s of stones) if (waiting(s) && !s.air && s.rest > 0.3 && (!b || s.seq < b.seq)) b = s;
+      if (!b) {
+        if (!spawnLeft && !stones.some(waiting)) spawnLeft = 1; // the picture fell behind the real queue
+        return;
+      }
+      b.claimed = true; w.b = b; w.ev = pending.shift(); w.state = "go"; w.up = false;
+      w.goal = w.ev === "ok" ? X2 - 0.3 : X0 + 2.5 + Math.random() * (X1 - X0) * 0.55;
     }
   }
+  const deadQueue = [];
 
   // Turn the change between two stats snapshots into boulder events.
   function ingest(s) {
@@ -285,149 +646,80 @@ async function start() {
     const mix = (kind, n) => { for (let j = 0; j < Math.min(n, 40); j++) evs.splice(Math.floor(Math.random() * (evs.length + 1)), 0, kind); };
     mix("fail", nFail); mix("dead", nDead);
     pending = pending.concat(evs);
-    // The hill walks at human pace; the real queue doesn't. Jobs beyond what the workers can show
-    // are delivered out of sight, straight from the hidden end of the line.
+    // The hill moves at human pace; the real queue doesn't. Jobs beyond what the workers can show
+    // are delivered out of sight, from the part of the line nobody can see.
     while (pending.length > MAX_PENDING) {
       const i = pending.indexOf("ok");
       if (i < 0) { pending.length = MAX_PENDING; break; }
       pending.splice(i, 1);
-      const hidden = queue.length > VIS ? queue.pop() : null;
-      if (hidden) { const k = stones.indexOf(hidden); if (k >= 0) kill(hidden, k); } else if (spawnLeft > 0) spawnLeft--;
+      if (spawnLeft > 0) spawnLeft--;
       delivered++;
     }
   }
 
-  function stepStones(dt) {
+  function stepWorld(dt) {
+    // New jobs fall onto the slab. Past VIS the line continues out of sight and the label keeps count.
+    let shown = 0; for (const b of stones) if (waiting(b)) shown++;
+    spawnT -= dt;
+    if (spawnT <= 0 && shown < VIS && spawnLeft > 0) { spawnLeft--; drop(); spawnT = 0.3; }
+    dispatch();
+    for (const w of workers) stepWorker(w, dt);
+    for (const b of stones) if (!b.held) physics(b, dt);
+    collide();
     for (let i = stones.length - 1; i >= 0; i--) {
-      const b = stones[i], p = b.m.position, ox = p.x;
-      if (b.state === "drop") {
-        b.v -= 16 * dt; p.y += b.v * dt;
-        const floor = SLAB.top + R + ground(SLAB.x, 0) - 0.05;
-        if (p.y <= floor) {
-          p.y = floor;
-          if (b.v < -4) { b.v *= -0.22; puff(p.x, floor - R, p.z, 5); } else { inbound--; join(b); }
-        }
-        roll(b, b.v * dt * 0.15, XAX);
-      } else if (b.state === "q") {
-        const qi = queue.indexOf(b);
-        if (qi >= VIS) { b.m.visible = false; p.copy(slot(VIS)); continue; }
-        if (!b.m.visible) { b.m.visible = true; b.m.scale.setScalar(0.01); }
-        if (b.m.scale.x < 1) b.m.scale.setScalar(Math.min(1, b.m.scale.x + dt * 3));
-        p.lerp(slot(qi), 1 - Math.exp(-dt * 2.5)); roll(b, p.x - ox);
-      } else if (b.state === "fetch") {
-        b.t += dt / 1.1; const k = ease(Math.min(1, b.t));
-        p.lerpVectors(b.from, b.to, k); p.y = ground(p.x, p.z) + R; roll(b, p.x - ox);
-        if (b.t >= 1) b.state = "ready";
-      } else if (b.state === "slip") {
-        b.v -= (2 + 9.8 * Math.sin(Math.atan(slope(p.x)))) * dt;
-        p.x += b.v * dt; p.y = ground(p.x, p.z) + R; roll(b, p.x - ox);
-        if (p.x < 0.8) {
-          puff(p.x, ground(p.x, p.z), p.z, 7);
-          if (b.dead) { tint(b, "bad"); b.state = "fall"; b.v = 0; }
-          else { tint(b, "warn"); slipped++; b.state = "q"; queue.splice(Math.min(queue.length, VIS - 1), 0, b); }
-        }
-      } else if (b.state === "fall") { // dead letter: rolls off the side of the lane and away
-        const oz = p.z; p.z -= 3.5 * dt; p.x -= dt; p.y = ground(p.x, p.z) + R; roll(b, oz - p.z, XAX);
-        if (p.z < -24) { kill(b, i); continue; }
-      } else if (b.state === "deliver") {
-        b.t += dt / 1.4; const k = ease(Math.min(1, b.t));
-        p.lerpVectors(b.from, b.to, k); p.y = ground(p.x, p.z) + R; roll(b, p.x - ox);
-        if (b.t >= 1) { tint(b, "accent"); flag.userData.pulse = 1; delivered++; b.state = "rest"; b.t = 0; }
-      } else if (b.state === "rest") { // sits by the flag a moment, then sinks out of the way
-        b.t += dt;
-        if (b.t > 2.2) { p.y -= dt * 0.9; if (b.t > 4.2) { kill(b, i); continue; } }
-      }
+      const b = stones[i];
+      if (b.out && !b.air && b.v.lengthSq() < 0.05 && b.p.x > X2 - 1) b.v.x += 0.6; // stalled on the brow: nudge it over
+      if (b.p.x > X2 + 16 || b.p.y < -30 || Math.abs(b.p.z) > 40 || b.p.x < -40) remove(b);
+      // Bounced behind the slab: nobody can push it over, so it fades and its job drops in again.
+      else if (waiting(b) && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = matte(b.m.material.clone()); b.m.material.transparent = true; spawnLeft++; }
     }
+    // Dead letters stay where they stop, red, until there are too many; the oldest ones fade out.
+    while (deadQueue.length > 5) { const b = deadQueue.shift(); if (b.gone) continue; b.fade = 1; b.m.material = matte(MAT.bad.clone()); b.m.material.transparent = true; }
+    for (let i = stones.length - 1; i >= 0; i--) {
+      const b = stones[i];
+      if (b.fade === undefined) continue;
+      b.fade -= dt * 0.6; b.m.material.opacity = Math.max(0, b.fade);
+      if (b.fade <= 0) { b.m.material.dispose(); remove(b); }
+    }
+    for (const s of dust) {
+      const u = s.userData; if (u.life <= 0) continue;
+      u.life -= dt * 0.55; s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - dt * 1.4);
+      s.scale.setScalar(0.5 + (1 - u.life) * 3); s.material.opacity = Math.max(0, u.life) * u.a;
+    }
+    if (flag.userData.pulse > 0) flag.userData.pulse = Math.max(0, flag.userData.pulse - dt * 1.2);
   }
 
-  const angLerp = (a, b, k) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k;
-  function stepWorkers(dt) {
-    for (const w of workers) {
-      const b = w.b;
-      let speed = 0;
-      w.target = { Idle: 1, Walk: 0, Run: 0 }; w.pose = "none";
-      if (w.state === "idle") {
-        w.x += (HOME - w.x) * Math.min(1, dt * 3); w.zz += (w.z + 1.4 - w.zz) * Math.min(1, dt * 3);
-        w.face = faceTo(1, 0);
-      } else if (w.state === "wait") {
-        w.face = faceTo(1, 0);
-        if (b.state === "ready") { w.state = "step"; w.t = 0; }
-      } else if (w.state === "step") {
-        const tx = b.m.position.x - R - 0.95;
-        const dx = tx - w.x, dz = w.z - w.zz, d = Math.hypot(dx, dz);
-        const st = Math.min(d, 1.6 * dt); if (d > 1e-3) { w.x += (dx / d) * st; w.zz += (dz / d) * st; w.face = faceTo(dx, dz); }
-        speed = 1.6; w.target = { Idle: 0, Walk: 1, Run: 0 };
-        if (d < 0.05) { w.state = "push"; b.state = "push"; w.face = faceTo(1, 0); w.goal = w.ev === "ok" ? X1 + 0.6 : X0 + 2 + Math.random() * (X1 - X0) * 0.6; }
-      } else if (w.state === "push") {
-        const bp = b.m.position, ox = bp.x, steep = slope(bp.x) / MAX_SLOPE;
-        speed = Math.min(3.2, 1.5 * (1 + pending.length / 12)) * (1 - 0.3 * steep);
-        bp.x = Math.min(w.goal, bp.x + speed * dt); bp.z = w.z; bp.y = ground(bp.x, bp.z) + R; roll(b, bp.x - ox);
-        w.x = bp.x - R - 0.95; w.zz = w.z; w.face = faceTo(1, 0);
-        w.target = speed > 2.4 ? { Idle: 0, Walk: 0, Run: 1 } : { Idle: 0, Walk: 1, Run: 0 };
-        w.pose = "push"; w.lean = 0.45 + 0.35 * steep;
-        if (bp.x >= w.goal) {
-          if (w.ev === "ok") {
-            b.state = "deliver"; b.t = 0; b.from = bp.clone();
-            b.to = new THREE.Vector3(FLAG_X - 2.2 + Math.random() * 1.2, 0, w.z * 0.35); b.to.y = ground(b.to.x, b.to.z) + R;
-            w.state = "cheer"; w.t = 1.1;
-          } else { b.state = "slip"; b.v = 0; b.dead = w.ev === "dead"; w.state = "dodge"; w.t = 0.7; }
-          w.b = null;
-        }
-      } else if (w.state === "cheer") {
-        w.t -= dt; w.pose = "cheer"; if (w.t <= 0) w.state = "down";
-      } else if (w.state === "dodge") { // the boulder slips: jump out of its way
-        w.t -= dt; speed = 3; w.zz += 3.2 * dt; w.face = faceTo(0.2, 1); w.target = { Idle: 0, Walk: 0, Run: 1 };
-        if (w.t <= 0) w.state = "down";
-      } else if (w.state === "down") {
-        const dx = HOME - w.x, dz = w.z + 1.4 - w.zz, d = Math.hypot(dx, dz);
-        speed = Math.min(5, 3.6 * (1 + pending.length / 30));
-        const st = Math.min(d, speed * dt); if (d > 1e-3) { w.x += (dx / d) * st; w.zz += (dz / d) * st; w.face = faceTo(dx, dz); }
-        w.target = { Idle: 0, Walk: 0, Run: 1 };
-        if (d < 0.05) w.state = "idle";
-      }
-      // Blend animations toward their targets; walk and run play at the speed the body actually moves.
-      for (const n of ["Idle", "Walk", "Run"]) {
-        w.weights[n] += (w.target[n] - w.weights[n]) * Math.min(1, dt * 6);
-        w.acts[n].setEffectiveWeight(w.weights[n]);
-      }
-      w.acts.Walk.timeScale = THREE.MathUtils.clamp(speed / 1.4, 0.5, 2);
-      w.acts.Run.timeScale = THREE.MathUtils.clamp(speed / 3.8, 0.6, 1.5);
-      const want = w.pose === "none" ? 0 : 1;
-      w.poseW += (want - w.poseW) * Math.min(1, dt * 7);
-      if (w.pose === "none" && w.poseW > 0.01) w.pose = w.lastPose; else if (w.pose !== "none") w.lastPose = w.pose;
-      w.mixer.update(dt);
-      w.model.position.set(w.x, ground(w.x, w.zz), w.zz);
-      w.model.rotation.y = angLerp(w.model.rotation.y, w.face, Math.min(1, dt * 8));
-      overlayPose(w);
-    }
-  }
+  // ---- HTML labels pinned to points in the world.
+  const tags = [["API", SLAB.x, 10.5, 0], ["Postgres", SLAB.x, SLAB_TOP - 1.2, 3.4], ["Queue", -4.5, 0.2, 5.6], ["Workers", 6.5, profile(6.5) + 3.6, -9.5], ["Your webhook", FLAG_X, H + 5.2, 0]]
+    .map(([text, x, y, z]) => { const el = document.createElement("div"); el.className = "tag"; el.textContent = text; host.appendChild(el); return { el, v: V(x, y, z) }; });
 
   // ---- Camera: a three-quarter view up the slope. On wide screens the frame shifts right so the
   // copy on the left sits over open sky. Drag to swing it a little.
-  const cam = new THREE.PerspectiveCamera(30, 1, 0.5, 600);
-  const look = new THREE.Vector3(5.5, 2.6, 0);
-  let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null;
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.5, 1500);
+  const look = V(5.5, 2.6, 0);
+  let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null, clock = 0;
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
     gl.setSize(w, h, false);
     cam.aspect = w / h;
     const wide = w > 900;
-    cam.userData = { yaw0: wide ? -0.3 : -0.4, dist: wide ? 48 : Math.max(46, 50 / cam.aspect), pitch: wide ? 0.2 : 0.28, shift: wide ? -0.12 : 0 };
-    look.x = wide ? 5.5 : 3.5;
-    cam.filmOffset = cam.userData.shift * cam.getFilmWidth();
+    cam.userData = { yaw0: wide ? -0.1 : -0.25, dist: wide ? 57 : Math.max(50, 54 / cam.aspect), pitch: wide ? 0.2 : 0.26 };
+    look.x = wide ? 3.5 : 3;
+    cam.filmOffset = (wide ? -0.2 : 0) * cam.getFilmWidth();
     cam.updateProjectionMatrix();
     render();
   }
   function place() {
-    const { yaw0 = -0.34, dist = 46, pitch = 0.3 } = cam.userData, a = yaw0 + yaw + sway * 0.06;
-    cam.position.set(look.x + Math.sin(a) * dist, look.y + dist * pitch, look.z + Math.cos(a) * dist);
-    cam.lookAt(look);
+    const { yaw0 = -0.1, dist = 57, pitch = 0.2 } = cam.userData, a = yaw0 + yaw + sway * 0.05;
+    const hand = reduce ? 0 : 1; // a slow, small drift, as if the camera were held
+    cam.position.set(look.x + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand, look.y + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand, look.z + Math.cos(a) * dist);
+    cam.lookAt(look.x + Math.sin(clock * 0.19) * 0.06 * hand, look.y, look.z);
   }
   host.addEventListener("pointermove", (e) => {
     const r = host.getBoundingClientRect();
     swayT = ((e.clientX - r.left) / r.width - 0.5) * 2;
-    if (drag) yawT = THREE.MathUtils.clamp(drag.y0 + (e.clientX - drag.x) / 320, -0.6, 0.6);
+    if (drag) yawT = clamp(drag.y0 + (e.clientX - drag.x) / 320, -0.6, 0.6);
   });
   host.addEventListener("pointerleave", () => { swayT = 0; drag = null; });
   host.addEventListener("pointerdown", (e) => { if (e.target === canvas) { drag = { x: e.clientX, y0: yawT }; canvas.style.cursor = "grabbing"; } });
@@ -436,78 +728,80 @@ async function start() {
   let visible = true;
   new IntersectionObserver((es) => { visible = es[0].isIntersecting; if (!visible) { pending = []; spawnLeft = 0; } }).observe(host);
 
-  const _p = new THREE.Vector3();
+  const _l = V();
   function labels() {
     const w = host.clientWidth, h = host.clientHeight;
     for (const t of tags) {
-      _p.copy(t.v).project(cam);
-      const half = t.el.offsetWidth / 2 + 8, x = THREE.MathUtils.clamp((_p.x + 1) / 2 * w, half, w - half);
-      t.el.style.transform = `translate(${x.toFixed(1)}px,${((1 - _p.y) / 2 * h).toFixed(1)}px) translate(-50%,-50%)`;
-      t.el.style.opacity = _p.z < 1 ? "" : "0";
+      _l.copy(t.v).project(cam);
+      const half = t.el.offsetWidth / 2 + 8, x = clamp(((_l.x + 1) / 2) * w, half, w - half);
+      t.el.style.transform = `translate(${x.toFixed(1)}px,${(((1 - _l.y) / 2) * h).toFixed(1)}px) translate(-50%,-50%)`;
+      t.el.style.opacity = _l.z < 1 ? "" : "0";
     }
   }
   function render() { place(); gl.render(scene, cam); labels(); }
 
-  // ---- Theme: daylight for light mode, a dim dusk for dark mode. Glow colours come from the page tokens.
+  // ---- Theme: daylight for light mode, dusk for dark mode. Tints come from the page's tokens.
   function applyTheme() {
     const dark = darkMQ.matches, cs = getComputedStyle(document.documentElement);
     const tok = (k) => new THREE.Color(cs.getPropertyValue("--" + k).trim());
-    gl.toneMappingExposure = dark ? 0.42 : 0.95;
+    gl.toneMappingExposure = dark ? 0.42 : 0.9;
     scene.backgroundIntensity = dark ? 0.5 : 1;
-    scene.environmentIntensity = dark ? 0.6 : 1;
-    sun.intensity = dark ? 1.4 : 3;
-    sun.color.set(dark ? 0xc8d4ff : 0xfff0dc);
-    scene.fog.color.copy(horizon).multiplyScalar(dark ? 0.55 : 1);
+    scene.environmentIntensity = dark ? 0.55 : 1;
+    sun.intensity = dark ? 1.3 : 3.2;
+    sun.color.set(dark ? 0xc8d4ff : 0xfff1de);
+    scene.fog.color.copy(aces(horizon.clone().multiplyScalar(scene.backgroundIntensity), gl.toneMappingExposure));
     flagMat.color.copy(tok("accent"));
-    for (const m of [MAT.warn, MAT.accent, MAT.bad, flagMat]) m.emissive.copy(tok(m.userData.glow));
-    MAT.warn.emissiveIntensity = dark ? 0.3 : 0.16;
-    MAT.accent.emissiveIntensity = dark ? 0.45 : 0.25;
-    MAT.bad.emissiveIntensity = dark ? 0.4 : 0.25;
+    flagMat.emissive.copy(tok("accent"));
+    for (const key of ["warn", "accent", "bad"]) {
+      const m = MAT[key], c = tok(key);
+      m.color.set(0xffffff).lerp(c, 0.3);
+      m.emissive.copy(c);
+      m.emissiveIntensity = dark ? 0.22 : 0.1;
+    }
   }
 
-  let last = performance.now(), hudT = 0;
+  let last = performance.now(), hudT = 0, tier = 0;
   const perf = { n: 0, sum: 0 };
   function frame(now) {
     requestAnimationFrame(frame);
     const raw = Math.min(0.5, (now - last) / 1000);
     last = now;
     if (!visible || document.hidden) return;
-    // Slow device: after 60 normal frames, drop shadows and render at 1x so the hill keeps moving.
-    if (perf.n < 60 && raw < 0.25) {
+    // Slow device: step quality down after a couple of seconds, until the hill keeps moving.
+    if (raw < 0.25) {
       perf.n++; perf.sum += raw;
-      if (perf.n === 60 && perf.sum / 60 > 1 / 30) {
-        gl.shadowMap.enabled = false; gl.setPixelRatio(1);
-        scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
-        resize();
+      if (perf.n === 60) {
+        if (perf.sum / 60 > 1 / 32 && tier < 2) {
+          tier++;
+          if (tier === 1) { gl.setPixelRatio(1); grass.mesh.count = Math.floor(grass.N / 2); resize(); }
+          else { gl.shadowMap.enabled = false; grass.mesh.visible = false; scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; }); }
+        }
+        perf.n = perf.sum = 0;
+        if (tier === 2) perf.n = -Infinity;
       }
     }
     // Fixed substeps keep the physics stable and in real time even when frames are slow.
-    for (let left = raw; left > 1e-4; left -= 0.04) {
-      const dt = Math.min(0.04, left);
+    for (let left = raw; left > 1e-4; left -= 0.025) {
+      const dt = Math.min(0.025, left);
       sway += (swayT - sway) * Math.min(1, dt * 2); yaw += (yawT - yaw) * Math.min(1, dt * 4); if (!drag) yawT *= Math.pow(0.4, dt);
-      spawnT -= dt;
-      while (spawnLeft > 0 && spawnT <= 0) { spawn(); spawnLeft--; spawnT += 0.12; }
-      if (spawnT < 0) spawnT = 0;
-      dispatch(); stepStones(dt); stepWorkers(dt);
-      for (const s of dust) {
-        const u = s.userData; if (u.life <= 0) continue;
-        u.life -= dt * 0.8; s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - dt * 1.5);
-        s.scale.setScalar(0.6 + (1 - u.life) * 2.4); s.material.opacity = Math.max(0, u.life) * 0.45;
-      }
-      if (flag.userData.pulse > 0) flag.userData.pulse = Math.max(0, flag.userData.pulse - dt * 1.5);
+      stepWorld(dt);
       hudT -= dt;
     }
+    clock += raw;
+    grass.uTime.value = clock;
+    for (const w of workers) animate(w, raw);
     const fl = flag.userData.pulse || 0, fp = flagGeo.attributes.position;
-    for (let i = 0; i < fp.count; i++) { const x = flagX[i]; fp.setZ(i, Math.sin(x * 3.2 - now / 160) * (0.12 + fl * 0.2) * (x / 2)); }
+    for (let i = 0; i < fp.count; i++) { const x = flagX[i]; fp.setZ(i, (Math.sin(x * 3.2 - clock * 6) * 0.6 + Math.sin(x * 5.1 - clock * 9.3) * 0.25) * (0.16 + fl * 0.2) * (x / 2)); }
     fp.needsUpdate = true; flagGeo.computeVertexNormals();
-    flagMat.emissiveIntensity = 0.15 + fl * 0.9;
+    flagMat.emissiveIntensity = 0.05 + fl * 0.6;
     if (hudT <= 0) {
       hudT = 0.15;
-      $("hq").textContent = queue.length + inbound;
-      $("hw").textContent = workers.filter((w) => w.state === "push" || w.state === "step" || w.state === "wait").length;
+      let shown = 0; for (const b of stones) if (waiting(b)) shown++;
+      $("hq").textContent = shown + spawnLeft;
+      $("hw").textContent = workers.filter((w) => w.b).length;
       $("hd").textContent = delivered; $("hs").textContent = slipped;
-      tags[2].el.textContent = queue.length > VIS ? `Queue, ${queue.length - VIS} more out of sight` : "Queue";
-      if (hint) { hint.textContent = "The hill is quiet. Press Run 100 jobs and one in five will slip on its first try."; hint.className = "hint" + (stones.length || pending.length || spawnLeft ? " off" : ""); }
+      tags[2].el.textContent = spawnLeft > 0 ? `Queue, ${spawnLeft} more out of sight` : "Queue";
+      if (hint) { hint.textContent = "The hill is quiet. Press Run 100 jobs and one in five will slip on its first try."; hint.className = "hint" + (stones.some(waiting) || pending.length || spawnLeft ? " off" : ""); }
     }
     render();
   }
@@ -519,7 +813,11 @@ async function start() {
   host.classList.add("ready");
   window.relayqHill = { ingest };
   if (reduce) {
-    stepWorkers(0); render();
+    // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
+    for (let i = 0; i < 6; i++) { drop(); for (let k = 0; k < 40; k++) { for (const b of stones) physics(b, 0.025); collide(); } }
+    for (let k = 0; k < 240; k++) { for (const b of stones) physics(b, 0.025); collide(); }
+    for (const w of workers) animate(w, 0);
+    render();
     if (hint) { hint.textContent = "Animation is off because your system asks for reduced motion. The numbers below are live."; hint.className = "hint"; }
   } else {
     if (hint) hint.className = "hint";

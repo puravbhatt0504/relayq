@@ -168,7 +168,8 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .live{display:inline-flex;align-items:center;gap:8px;color:var(--fg-2);font:500 12px var(--font)}
 .live i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
 .live.down i{background:var(--bad)}
-.hint{position:absolute;right:24px;bottom:72px;margin:0;font-size:13px;color:var(--fg-3);transition:opacity .4s;pointer-events:none;max-width:260px;text-align:right}
+.hint{position:absolute;right:24px;bottom:72px;margin:0;font-size:13px;color:var(--fg-2);transition:opacity .4s;pointer-events:none;max-width:280px;
+  background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 12px;backdrop-filter:blur(6px)}
 .hint.off{opacity:0}
 .nogl{position:absolute;inset:0;display:grid;place-items:center;padding:32px;text-align:center;color:var(--fg-2);font-size:14.5px}
 
@@ -492,6 +493,6 @@ footer nav{gap:24px}
 
 })();
 </script>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=1"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
+<script type="module" src="/demo/assets/hill.js?v=2"></script>
 </body></html>`;
