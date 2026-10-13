@@ -13,15 +13,15 @@ const delivered = new Map<string, { id: string; embedding: number[] }[]>();
 let sink: Server;
 
 const port = (s: Server) => (s.address() as AddressInfo).port;
-const readJson = (req: import("node:http").IncomingMessage) =>
-  new Promise<any>((r) => { let b = ""; req.on("data", (c) => (b += c)).on("end", () => r(JSON.parse(b))); });
+const readJson = <T>(req: import("node:http").IncomingMessage) =>
+  new Promise<T>((r) => { let b = ""; req.on("data", (c) => (b += c)).on("end", () => r(JSON.parse(b))); });
 
 let env: Awaited<ReturnType<typeof startEnv>>;
 let workers: ReturnType<typeof startWorkers>;
 
 beforeAll(async () => {
   provider = createServer(async (req, res) => {
-    const { input } = await readJson(req);
+    const { input } = await readJson<{ input: string[] }>(req);
     calls.push({ t: Date.now(), n: input.length });
     if (rateLimitNext) {
       rateLimitNext = false;
@@ -32,7 +32,7 @@ beforeAll(async () => {
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data }));
   }).listen(0);
   sink = createServer(async (req, res) => {
-    delivered.set(String(req.headers["idempotency-key"]), (await readJson(req)).items);
+    delivered.set(String(req.headers["idempotency-key"]), (await readJson<{ items: { id: string; embedding: number[] }[] }>(req)).items);
     res.end("ok");
   }).listen(0);
   process.env.VOYAGE_BASE_URL = `http://127.0.0.1:${port(provider)}`;
