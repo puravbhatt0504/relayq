@@ -42,7 +42,7 @@ Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-Rel
 
 ```bash
 cd infra && npm ci
-DESTROY_AT=2026-10-15T05:44:00Z ALERT_EMAIL=you@example.com npx cdk deploy --all
+DESTROY_AT=2026-10-18T05:44:00Z ALERT_EMAIL=you@example.com npx cdk deploy --all
 npx cdk destroy RelayQ   # tear down early
 ```
 
