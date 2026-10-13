@@ -184,7 +184,7 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 5 Docker / CI / AWS (AWS window ends 2026-10-15; HTTPS on AWS pending CloudFront verification)
 - [x] Phase 6 Throughput
 - [x] Phase 7 Outbox + chaos test
-- [ ] Phase 8 Tracing
+- [x] Phase 8 Tracing (RelayQ side: otel.test + Jaeger trace api→worker in compose. PulseBoard single-trace check pending its Phase 9; ADOT→X-Ray skipped, AWS window too short)
 - [ ] Phase 9 embed.batch
 - [ ] Phase 10 llm.complete: budgets, fallback, cost
 - [ ] Phase 11 ml.retrain + model registry

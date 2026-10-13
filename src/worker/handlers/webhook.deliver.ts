@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { injectTrace } from "../../lib/tracing.js";
 import type { Handler } from "./types.js";
 
 export const sign = (raw: string, secret: string) => createHmac("sha256", secret).update(raw).digest("hex");
@@ -14,11 +15,12 @@ export async function signedPost(url: string, body: unknown, idempotencyKey: str
   const raw = JSON.stringify(body ?? null);
   const res = await fetch(url, {
     method: "POST",
-    headers: {
+    // traceparent: the receiver (e.g. PulseBoard's export callback) continues this job's trace.
+    headers: injectTrace({
       "content-type": "application/json",
       "x-relayq-signature": sign(raw, secret),
       "idempotency-key": idempotencyKey,
-    },
+    }),
     body: raw,
     signal: AbortSignal.timeout(10_000),
   });

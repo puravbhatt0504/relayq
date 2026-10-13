@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { pino } from "pino";
 import { once } from "../lib/effects.js";
+import { contextFrom, SpanKind, withSpan } from "../lib/tracing.js";
 import { jobDuration, jobsTotal, registry } from "../lib/metrics.js";
 import { createQueues, jobTypes, typeLimits, type JobData } from "../queue/queues.js";
 import { boardExport } from "./handlers/board.export.js";
@@ -49,38 +50,43 @@ export function startWorkers({ connection, prisma, dead, handlers = defaultHandl
         throw new DelayedError();
       }
       const attempts = job.attemptsMade + 1;
-      const log = logger.child({ jobId: id, type, tenant, attempt: attempts });
-      // A finished record means this is a stale re-delivery (e.g. outbox re-published after a crash).
-      const { count } = await prisma.jobRecord.updateMany({
-        where: { id, status: { notIn: ["completed", "dead"] } },
-        data: { status: "active", attempts },
-      });
-      if (count === 0) {
-        log.warn("job already finished, skipping re-delivery");
-        return null;
-      }
-      log.info("job started");
-      const timer = jobDuration.startTimer({ type });
-      try {
-        const result = await handle(payload as never, { jobId: id, once: (step, fn) => once(prisma, id, step, fn) });
-        timer();
-        await prisma.jobRecord.update({
-          where: { id },
-          data: { status: "completed", result: (result ?? Prisma.DbNull) as Prisma.InputJsonValue, error: null },
+      // One span per attempt, a child of the enqueue span (same trace as the caller's request).
+      const parent = contextFrom({ traceparent: job.data.traceparent });
+      const attrs = { "relayq.job_id": id, "relayq.tenant": tenant, "relayq.attempt": String(attempts) };
+      return withSpan(`process ${type}`, SpanKind.CONSUMER, parent, attrs, async () => {
+        const log = logger.child({ jobId: id, type, tenant, attempt: attempts });
+        // A finished record means this is a stale re-delivery (e.g. outbox re-published after a crash).
+        const { count } = await prisma.jobRecord.updateMany({
+          where: { id, status: { notIn: ["completed", "dead"] } },
+          data: { status: "active", attempts },
         });
-        jobsTotal.inc({ type, status: "completed" });
-        log.info("job completed");
-        return result;
-      } catch (err) {
-        timer();
-        const error = err instanceof Error ? err.message : String(err);
-        const last = attempts >= (job.opts.attempts ?? 1);
-        if (last) await dead.add(type, { type, tenant, payload, error }, { jobId: id });
-        await prisma.jobRecord.update({ where: { id }, data: { status: last ? "dead" : "failed", error } });
-        jobsTotal.inc({ type, status: last ? "dead" : "failed" });
-        log[last ? "error" : "warn"]({ err: error }, last ? "job dead" : "job failed, will retry");
-        throw err;
-      }
+        if (count === 0) {
+          log.warn("job already finished, skipping re-delivery");
+          return null;
+        }
+        log.info("job started");
+        const timer = jobDuration.startTimer({ type });
+        try {
+          const result = await handle(payload as never, { jobId: id, once: (step, fn) => once(prisma, id, step, fn) });
+          timer();
+          await prisma.jobRecord.update({
+            where: { id },
+            data: { status: "completed", result: (result ?? Prisma.DbNull) as Prisma.InputJsonValue, error: null },
+          });
+          jobsTotal.inc({ type, status: "completed" });
+          log.info("job completed");
+          return result;
+        } catch (err) {
+          timer();
+          const error = err instanceof Error ? err.message : String(err);
+          const last = attempts >= (job.opts.attempts ?? 1);
+          if (last) await dead.add(type, { type, tenant, payload, error }, { jobId: id });
+          await prisma.jobRecord.update({ where: { id }, data: { status: last ? "dead" : "failed", error } });
+          jobsTotal.inc({ type, status: last ? "dead" : "failed" });
+          log[last ? "error" : "warn"]({ err: error }, last ? "job dead" : "job failed, will retry");
+          throw err;
+        }
+      });
     }, {
       connection, concurrency, limiter: typeLimits[type],
       // A killed worker leaves its jobs stalled; they're re-delivered (once() keeps effects single).

@@ -1,6 +1,8 @@
+import { context, trace } from "@opentelemetry/api";
 import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { contextFrom, SpanKind, withSpan } from "../../lib/tracing.js";
 import { enqueue } from "../../outbox/enqueue.js";
 import { jobTypes, payloadSchemas, type JobType } from "../../queue/queues.js";
 import type { Deps } from "../server.js";
@@ -30,7 +32,13 @@ export function jobRoutes(app: FastifyInstance, { prisma, queues }: Deps) {
     const backlog = await prisma.jobRecord.count({ where: { tenant, status: { in: ["pending", "queued"] } } });
     if (backlog >= MAX_QUEUED_PER_TENANT) return reply.code(429).send({ error: `over ${MAX_QUEUED_PER_TENANT} queued jobs` });
 
-    const { jobId, created } = await enqueue(prisma, { tenant, type: type as JobType, payload: p.data, priority, idempotencyKey, delayMs });
+    // Parent: the HTTP server span when auto-instrumentation runs, else the caller's traceparent header.
+    const parent = trace.getActiveSpan() ? context.active() : contextFrom(req.headers);
+    const { jobId, created } = await withSpan(`enqueue ${type}`, SpanKind.PRODUCER, parent, { "relayq.tenant": tenant }, async (span) => {
+      const r = await enqueue(prisma, { tenant, type: type as JobType, payload: p.data, priority, idempotencyKey, delayMs });
+      span.setAttribute("relayq.job_id", r.jobId);
+      return r;
+    });
     return reply.code(created ? 202 : 200).send({ jobId, status: "queued" });
   });
 

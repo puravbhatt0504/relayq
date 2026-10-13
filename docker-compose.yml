@@ -14,6 +14,7 @@ x-app: &app
     EXPORT_BUCKET: ${EXPORT_BUCKET:-relayq-exports}
     TENANT_JOBS_PER_MIN: ${TENANT_JOBS_PER_MIN:-100}
     WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   depends_on:
     migrate: { condition: service_completed_successfully }
     redis: { condition: service_healthy }
@@ -27,13 +28,17 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  # --import ./dist/otel.js starts OpenTelemetry before the app loads (traces → Jaeger UI on :16686).
   api:
     <<: *app
+    command: ["node", "--import", "./dist/otel.js", "dist/api/server.js"]
+    environment: { <<: *env, OTEL_SERVICE_NAME: relayq-api }
     ports: ["3000:3000"]
 
   worker:
     <<: *app
-    command: ["node", "dist/worker/index.js"]
+    command: ["node", "--import", "./dist/otel.js", "dist/worker/index.js"]
+    environment: { <<: *env, OTEL_SERVICE_NAME: relayq-worker }
     deploy: { replicas: 3 }
     stop_grace_period: 35s # worker drains for up to 30s on SIGTERM
 
@@ -47,6 +52,10 @@ services:
     environment: { POSTGRES_USER: relayq, POSTGRES_PASSWORD: relayq, POSTGRES_DB: relayq }
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD", "pg_isready", "-U", "relayq"], interval: 2s, retries: 15 }
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0 # OTLP/HTTP on 4318, UI on 16686
+    ports: ["16686:16686"]
 
   mailhog:
     image: mailhog/mailhog:v1.0.1

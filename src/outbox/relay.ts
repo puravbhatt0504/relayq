@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { JobData, JobType, Queues } from "../queue/queues.js";
 
 type Row = {
-  id: bigint; jobId: string; delayMs: number | null; createdAt: Date;
+  id: bigint; jobId: string; delayMs: number | null; createdAt: Date; traceparent: string | null;
   type: JobType; tenant: string; priority: number; payload: unknown;
 };
 
@@ -17,7 +17,7 @@ const BATCH = 100;
 export async function relayOnce(prisma: PrismaClient, queues: Queues): Promise<number> {
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Row[]>`
-      SELECT o.id, o."jobId", o."delayMs", o."createdAt", j.type, j.tenant, j.priority, j.payload
+      SELECT o.id, o."jobId", o."delayMs", o."createdAt", o.traceparent, j.type, j.tenant, j.priority, j.payload
       FROM "Outbox" o JOIN "JobRecord" j ON j.id = o."jobId"
       WHERE o."publishedAt" IS NULL
       ORDER BY o.id
@@ -28,7 +28,7 @@ export async function relayOnce(prisma: PrismaClient, queues: Queues): Promise<n
     for (const type of new Set(rows.map((r) => r.type))) {
       await queues[type].addBulk(rows.filter((r) => r.type === type).map((r) => ({
         name: type,
-        data: { tenant: r.tenant, payload: r.payload } satisfies JobData,
+        data: { tenant: r.tenant, payload: r.payload, traceparent: r.traceparent ?? undefined } satisfies JobData,
         opts: {
           jobId: r.jobId,
           priority: r.priority,
