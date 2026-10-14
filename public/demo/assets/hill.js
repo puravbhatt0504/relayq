@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { createSound } from "./sound.js?v=2";
 
 const $ = (id) => document.getElementById(id);
@@ -37,8 +38,9 @@ function profile(x) {
 // behind it, rolling country, and far off, mountains.
 function ground(x, z) {
   const ridge = 1 - S(z, 10, 17), back = S(-z, 12, 30), front = S(z, 14, 26), far = S(Math.hypot(x - 4, z), 70, 260);
-  const hills = Math.sin(x * 0.09 + z * 0.06) * 2.4 + Math.sin(x * 0.21 - z * 0.17) * 1.2 + Math.sin(z * 0.29 + 1.3) * 0.7;
-  const peaks = Math.sin(x * 0.013 + 1.1) * Math.sin(z * 0.017 - 0.4) * 30 + Math.sin(x * 0.031 - z * 0.027) * 9;
+  const crest = (v) => 1 - Math.abs(Math.sin(v)); // sharp ridgelines instead of rolling swells
+  const hills = Math.sin(x * 0.09 + z * 0.06) * 2.4 + Math.sin(x * 0.21 - z * 0.17) * 1.2 + Math.sin(z * 0.29 + 1.3) * 0.7 + 3 * crest(x * 0.15 - z * 0.08) ** 3;
+  const peaks = 48 * (crest(x * 0.011 + z * 0.003 + 1.1) * crest(z * 0.014 - x * 0.005 - 0.4)) ** 2 + 15 * crest(x * 0.031 - z * 0.027) ** 3 + 5 * crest(x * 0.07 + z * 0.05) ** 2 - 8;
   const rough = Math.sin(x * 1.9) * Math.sin(z * 1.6) * 0.04 + Math.sin(x * 0.7 + z * 0.9) * Math.sin(z * 0.6 - x * 0.4) * 0.08;
   return profile(x) * ridge + back * (hills + 3.5) + front * Math.sin(x * 0.23 + 0.7) * Math.sin(z * 0.31) * 0.5 + far * (peaks + 12) + rough;
 }
@@ -68,6 +70,14 @@ function aces(c, exposure) {
   const f = (v) => (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.432951) + 0.238081);
   const x = f(0.59719 * r + 0.35458 * g + 0.04823 * b), y = f(0.076 * r + 0.90834 * g + 0.01566 * b), z = f(0.0284 * r + 0.13383 * g + 0.83777 * b);
   return new THREE.Color(clamp(1.60475 * x - 0.53108 * y - 0.07367 * z, 0, 1), clamp(-0.10208 * x + 1.10813 * y - 0.00605 * z, 0, 1), clamp(-0.00327 * x - 0.07276 * y + 1.07602 * z, 0, 1));
+}
+// Smooth value noise in 3D, -1..1, for the boulders' weathered shape.
+function noise3(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), u = S(x - xi, 0, 1), v = S(y - yi, 0, 1), w = S(z - zi, 0, 1);
+  const h = (a, b, c) => { let n = (a * 374761393 + b * 668265263 + c * 1274126177) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177); return ((n ^ (n >>> 16)) >>> 0) / 2147483648 - 1; };
+  const L = (a, b, t) => a + (b - a) * t;
+  return L(L(L(h(xi, yi, zi), h(xi + 1, yi, zi), u), L(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), u), v),
+    L(L(h(xi, yi, zi + 1), h(xi + 1, yi, zi + 1), u), L(h(xi, yi + 1, zi + 1), h(xi + 1, yi + 1, zi + 1), u), v), w);
 }
 function rng(seed) { return () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -111,23 +121,25 @@ async function start() {
   ]);
 
   // ---- Sky. Spin the HDRI so its sun sits to the left of the hill, then put the shadow-casting sun
-  // exactly there. The sun's hot spot is clipped out of the sky used for ambient light, so shaded
-  // sides stay shaded instead of being lit a second time by the sky.
+  // there, low, for long shadows. The sun's hot spot is clipped out of the sky used for ambient
+  // light, so shaded sides stay shaded. The blue daytime sky is graded into the myth's: a dusty,
+  // smouldering dusk, warm at the horizon and duller above, as von Stuck and Titian paint it.
   const scene = new THREE.Scene();
   const { data, width: W, height: HH } = sky.image;
   let sunI = 0, sunL = 0;
   for (let i = 0; i < W * HH; i++) { const l = data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]; if (l > sunL) { sunL = l; sunI = i; } }
-  const sunRow = Math.floor(sunI / W), sunCol = sunI % W, want = Math.atan2(-0.25, -0.85);
+  const sunCol = sunI % W, want = Math.atan2(-0.25, -0.85), DUSK = [1.4, 0.8, 0.5], HIGH = [0.9, 0.74, 0.76];
   const shift = (((Math.round(((want / (2 * Math.PI) + 0.5) * W - 0.5 - sunCol)) % W) + W) % W);
   const copy = data.slice();
   for (let r = 0; r < HH; r++) for (let c = 0; c < W; c++) {
     const from = (r * W + c) * 4, to = (r * W + ((c + shift) % W)) * 4;
     let k = 1; const l = (copy[from] + copy[from + 1] + copy[from + 2]) / 3;
     if (l > 6) k = 6 / l;
-    data[to] = copy[from] * k; data[to + 1] = copy[from + 1] * k; data[to + 2] = copy[from + 2] * k;
+    const t = clamp(((0.5 - (r + 0.5) / HH) * Math.PI) / 0.75, 0, 1) ** 0.6, dim = 1 - 0.3 * t;
+    for (let ch = 0; ch < 3; ch++) data[to + ch] = (l * k + (copy[from + ch] * k - l * k) * 0.45) * (DUSK[ch] + (HIGH[ch] - DUSK[ch]) * t) * dim;
   }
   sky.needsUpdate = true;
-  const sunEl = Math.max(0.42, (0.5 - (sunRow + 0.5) / HH) * Math.PI);
+  const sunEl = 0.34;
   const sunDir = V(Math.cos(want) * Math.cos(sunEl), Math.sin(sunEl), Math.sin(want) * Math.cos(sunEl));
   const horizon = new THREE.Color(0, 0, 0);
   { let n = 0; for (let r = Math.floor(HH * 0.478); r < Math.floor(HH * 0.497); r++) for (let c = 0; c < W; c++) { const i = (r * W + c) * 4; horizon.r += data[i]; horizon.g += data[i + 1]; horizon.b += data[i + 2]; n++; } horizon.multiplyScalar(1 / n); }
@@ -136,7 +148,7 @@ async function start() {
   scene.background = sky;
   const pmrem = new THREE.PMREMGenerator(gl);
   scene.environment = pmrem.fromEquirectangular(sky).texture;
-  scene.fog = new THREE.FogExp2(0xffffff, 0.003);
+  scene.fog = new THREE.FogExp2(0xffffff, 0.0042); // haze, so the crags stand in layers
 
   const sun = new THREE.DirectionalLight(0xfff1de, 3.2);
   sun.target.position.set(3, 2, 1);
@@ -152,7 +164,9 @@ async function start() {
   // world units so the scanned ground texture has the same scale on both; worn ground is browner.
   for (const t of [tDiff, tNor, tRough]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = gl.capabilities.getMaxAnisotropy(); }
   tDiff.colorSpace = THREE.SRGBColorSpace;
-  const groundMat = new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true });
+  // The scan is a green upland; the myth's mountain is dry. Its grass is regraded to sun-dried earth.
+  const dry = (m) => { m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("#include <map_fragment>", "#include <map_fragment>\n{ float l = dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) ); diffuseColor.rgb = mix( l * vec3( 1.6, 1.25, 0.88 ), diffuseColor.rgb, 0.1 ); }"); }; return m; };
+  const groundMat = dry(new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true }));
   const NEAR = { x0: -34, x1: 46, z0: -30, z1: 26 };
   const inNear = (x, z) => x > NEAR.x0 + 1 && x < NEAR.x1 - 1 && z > NEAR.z0 + 1 && z < NEAR.z1 - 1;
   function terrain(w, d, cx, cz, step, sink) {
@@ -174,7 +188,7 @@ async function start() {
   terrain(NEAR.x1 - NEAR.x0, NEAR.z1 - NEAR.z0, (NEAR.x0 + NEAR.x1) / 2, (NEAR.z0 + NEAR.z1) / 2, small ? 0.4 : 0.25, false);
   terrain(1000, 1000, 4, 0, 6, true);
 
-  // ---- Grass: tufts of blades that sway in the wind. Short and sparse where the ground is worn.
+  // ---- Grass: dry tufts in patches that sway in the wind. Short and sparse where the ground is worn.
   const grass = (() => {
     const ys = [0, 0.35, 0.7, 1], ws = [0.5, 0.4, 0.24], pos = [], idx = [];
     for (let k = 0; k < 3; k++) pos.push(-ws[k] / 2, ys[k], 0.25 * ys[k] ** 2, ws[k] / 2, ys[k], 0.25 * ys[k] ** 2);
@@ -206,13 +220,13 @@ async function start() {
       sh.fragmentShader = "varying float vH;\n" + sh.fragmentShader
         .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= mix( 0.3, 1.0, vH );");
     };
-    const N = small ? 30000 : 72000, mesh = new THREE.InstancedMesh(g, mat, N), r = rng(7);
+    const N = small ? 14000 : 34000, mesh = new THREE.InstancedMesh(g, mat, N), r = rng(7);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = V(), at = V(), c = new THREE.Color();
-    const palette = [new THREE.Color(0.06, 0.1, 0.02), new THREE.Color(0.1, 0.14, 0.03), new THREE.Color(0.16, 0.16, 0.05), new THREE.Color(0.12, 0.13, 0.035)];
+    const palette = [new THREE.Color(0.36, 0.28, 0.14), new THREE.Color(0.3, 0.25, 0.12), new THREE.Color(0.44, 0.35, 0.18), new THREE.Color(0.22, 0.2, 0.1)];
     let n = 0;
     while (n < N) {
       const cx = -20 + r() * 50, cz = -16 + r() * 40;
-      if (slabTop(cx, cz) > -Infinity) continue;
+      if (slabTop(cx, cz) > -Infinity || noise3(cx * 0.3, 0, cz * 0.3) < 0.05) continue; // patches, bare ground between
       const wr = wear(cx, cz), tall = (0.18 + r() * 0.42) * (1 - wr * 0.85), base = palette[Math.floor(r() * palette.length)];
       if (wr > 0.6 && r() < 0.6) continue;
       for (let k = 0; k < 9 && n < N; k++, n++) {
@@ -241,9 +255,46 @@ async function start() {
   // The scan reads wet in full sun: keep it matte, and a touch greyer so the amber retry tint stands out.
   const matte = (m) => { m.envMapIntensity = 0.6; m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = max( roughnessFactor, 0.8 );"); }; return m; };
   matte(rockMat).color.setRGB(0.9, 0.93, 1);
+
+  // ---- The boulders themselves are round, as in every telling of the myth: a sphere weathered by a
+  // few octaves of noise, slightly squat. The scan's atlas is mostly smeared padding, so the stone
+  // surface comes from one clean island of it, mirror-tiled in the rock's own space (it rolls with
+  // the rock), with the scan's occlusion channel for pits and cracks.
+  let boulderGeo = new THREE.IcosahedronGeometry(R, small ? 16 : 28);
+  boulderGeo.deleteAttribute("normal"); boulderGeo.deleteAttribute("uv");
+  boulderGeo = mergeVertices(boulderGeo);
+  {
+    const p = boulderGeo.attributes.position, n = V();
+    for (let i = 0; i < p.count; i++) {
+      n.set(p.getX(i), p.getY(i), p.getZ(i)).normalize();
+      const k = 1 + 0.06 * noise3(n.x * 1.6, n.y * 1.6, n.z * 1.6) + 0.025 * noise3(n.x * 4 + 7, n.y * 4, n.z * 4) + 0.01 * noise3(n.x * 11 + 3, n.y * 11, n.z * 11);
+      p.setXYZ(i, n.x * R * k, n.y * R * k * 0.94, n.z * R * k);
+    }
+    boulderGeo.computeVertexNormals();
+    boulderGeo.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(p.count * 2), 2));
+  }
+  const armTex = rockMat.aoMap || rockMat.roughnessMap;
+  const stoneShader = (sh) => {
+    sh.uniforms.tArm = { value: armTex };
+    sh.vertexShader = "varying vec3 vOP;\nvarying vec3 vON;\n" + sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvOP = position; vON = normal;");
+    sh.fragmentShader = [
+      "uniform sampler2D tArm;", "varying vec3 vOP;", "varying vec3 vON;",
+      "vec2 isl( vec2 p ) { return vec2( 0.35, 0.52 ) + abs( mod( p * vec2( 1.0, 0.44 ), 2.0 ) - 1.0 ) * vec2( 0.19, 0.43 ); }",
+      "vec4 tri( sampler2D t, vec3 p, vec3 w ) { return texture2D( t, isl( p.yz ) ) * w.x + texture2D( t, isl( p.zx ) ) * w.y + texture2D( t, isl( p.xy ) ) * w.z; }",
+      sh.fragmentShader,
+    ].join("\n").replace("#include <map_fragment>", [
+      "vec3 tw = pow( abs( normalize( vON ) ), vec3( 4.0 ) ); tw /= tw.x + tw.y + tw.z;",
+      "vec3 tp = vOP * 2.2;",
+      "vec3 sc = tri( map, tp, tw ).rgb;",
+      "diffuseColor.rgb *= mix( vec3( dot( sc, vec3( 0.3, 0.59, 0.11 ) ) ), sc, 0.5 ) * 1.2;",
+      "diffuseColor.rgb *= mix( 0.5, 1.0, tri( tArm, tp + 3.1, tw ).r );",
+    ].join("\n"));
+  };
+  const stone = () => { const m = new THREE.MeshStandardMaterial({ map: rockMat.map, roughness: 0.9, emissive: 0x000000 }); m.envMapIntensity = 0.6; m.onBeforeCompile = stoneShader; return m; };
+  const fadeStone = (src) => { const m = stone(); m.color.copy(src.color); m.emissive.copy(src.emissive); m.emissiveIntensity = src.emissiveIntensity; m.transparent = true; return m; };
   // A few hundred surface points, used to find which part of a tumbling rock touches the ground.
   const hull = [];
-  { const p = rockGeo.attributes.position, step = Math.max(1, Math.floor(p.count / 300)); for (let i = 0; i < p.count; i += step) hull.push(p.getX(i), p.getY(i), p.getZ(i)); }
+  { const p = boulderGeo.attributes.position, step = Math.max(1, Math.floor(p.count / 300)); for (let i = 0; i < p.count; i += step) hull.push(p.getX(i), p.getY(i), p.getZ(i)); }
 
   // Outcrops on the hillsides and loose stones in the grass, so the hill isn't a lawn.
   {
@@ -271,7 +322,7 @@ async function start() {
 
   // Postgres: a tilted slab of stone. Boulders land on it and roll off into the hollow.
   const slabTex = (t) => { const c = t.clone(); c.repeat.set(1.2, 1.2); c.needsUpdate = true; return c; };
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(SLAB.len, 2.4, SLAB.wid), new THREE.MeshStandardMaterial({ map: slabTex(tDiff), normalMap: slabTex(tNor), color: 0x8f8a82, roughness: 0.95 }));
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(SLAB.len, 2.4, SLAB.wid), dry(new THREE.MeshStandardMaterial({ map: slabTex(tDiff), normalMap: slabTex(tNor), color: 0x8f8a82, roughness: 0.95 })));
   slab.rotation.z = -SLAB.tilt;
   slab.position.set(SLAB.x - Math.sin(SLAB.tilt) * 1.2, SLAB_TOP - Math.cos(SLAB.tilt) * 1.2, 0);
   slab.castShadow = slab.receiveShadow = true;
@@ -317,8 +368,9 @@ async function start() {
   }
 
   // ---- Boulders.
-  const tintMat = (key) => { const m = matte(rockMat.clone()); m.emissive = new THREE.Color(); m.userData.glow = key; return m; };
-  const MAT = { rock: rockMat, warn: tintMat("warn"), accent: tintMat("accent"), bad: tintMat("bad") };
+  const tintMat = (key) => { const m = stone(); m.userData.glow = key; return m; };
+  const MAT = { rock: stone(), warn: tintMat("warn"), accent: tintMat("accent"), bad: tintMat("bad") };
+  MAT.rock.color.setRGB(1, 0.97, 0.93);
   const stones = [];
   let seq = 0;
   const _q = new THREE.Quaternion(), _ax = V();
@@ -336,10 +388,11 @@ async function start() {
     support(b);
   }
   function boulder() {
-    const m = new THREE.Mesh(rockGeo, MAT.rock);
+    const m = new THREE.Mesh(boulderGeo, MAT.rock);
     m.castShadow = m.receiveShadow = true;
     m.quaternion.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
-    m.scale.set(0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22);
+    const size = 0.9 + Math.random() * 0.2;
+    m.scale.set(size * (0.97 + Math.random() * 0.06), size * (0.97 + Math.random() * 0.06), size * (0.97 + Math.random() * 0.06));
     scene.add(m);
     const b = { m, p: m.position, v: V(), r: R * (m.scale.x + m.scale.y + m.scale.z) / 3, lift: R, air: true, held: false, claimed: false, dead: false, seq: seq++, gone: false, spin: V(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(), spinRate: 0 };
     support(b);
@@ -753,10 +806,10 @@ async function start() {
       if (b.out && !b.air && b.v.lengthSq() < 0.05 && b.p.x > X2 - 1) b.v.x += 0.6; // stalled on the brow: nudge it over
       if (b.p.x > X2 + 16 || b.p.y < -30 || Math.abs(b.p.z) > 40 || b.p.x < -40) remove(b);
       // Bounced behind the slab: nobody can push it over, so it fades and its job drops in again.
-      else if (waiting(b) && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = matte(b.m.material.clone()); b.m.material.transparent = true; spawnLeft++; }
+      else if (waiting(b) && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = fadeStone(b.m.material); spawnLeft++; }
     }
     // Dead letters stay where they stop, red, until there are too many; the oldest ones fade out.
-    while (deadQueue.length > 5) { const b = deadQueue.shift(); if (b.gone) continue; b.fade = 1; b.m.material = matte(MAT.bad.clone()); b.m.material.transparent = true; }
+    while (deadQueue.length > 5) { const b = deadQueue.shift(); if (b.gone) continue; b.fade = 1; b.m.material = fadeStone(MAT.bad); }
     for (let i = stones.length - 1; i >= 0; i--) {
       const b = stones[i];
       if (b.fade === undefined) continue;
@@ -885,7 +938,7 @@ async function start() {
     scene.backgroundIntensity = dark ? 0.5 : 1;
     scene.environmentIntensity = dark ? 0.55 : 1;
     sun.intensity = dark ? 1.3 : 3.2;
-    sun.color.set(dark ? 0xc8d4ff : 0xfff1de);
+    sun.color.set(dark ? 0xff9466 : 0xffc89a); // golden hour by day, a red dusk at night
     scene.fog.color.copy(aces(horizon.clone().multiplyScalar(scene.backgroundIntensity), gl.toneMappingExposure));
     flagMat.color.copy(tok("accent"));
     flagMat.emissive.copy(tok("accent"));
