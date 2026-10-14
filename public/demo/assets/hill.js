@@ -7,11 +7,13 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
+import { createSound } from "./sound.js?v=1";
 
 const $ = (id) => document.getElementById(id);
 const host = $("scene"), canvas = $("gl"), hint = $("hint");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+const sfx = createSound();
 const BASE = "/demo/assets/";
 const { smoothstep: S, clamp } = THREE.MathUtils;
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -299,18 +301,18 @@ async function start() {
   })();
   const dust = Array.from({ length: 64 }, () => {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dustTex, color: 0xa89478, transparent: true, opacity: 0, depthWrite: false }));
-    s.userData = { life: 0, v: V(), a: 0.4 };
+    s.userData = { life: 0, v: V(), a: 0.4, size: 1 };
     scene.add(s);
     return s;
   });
   let dustI = 0;
-  function puff(x, y, z, n, strength = 1) {
+  function puff(x, y, z, n, strength = 1, size = 1) {
     for (let k = 0; k < n; k++) {
       const s = dust[dustI++ % dust.length], u = s.userData;
-      s.position.set(x + (Math.random() - 0.5) * 1.2, y + 0.15, z + (Math.random() - 0.5) * 1.2);
-      u.life = 1; u.a = Math.min(0.55, 0.18 + strength * 0.06);
-      u.v.set((Math.random() - 0.5) * 2, 0.4 + Math.random() * 0.7, (Math.random() - 0.5) * 2);
-      s.scale.setScalar(0.5);
+      s.position.set(x + (Math.random() - 0.5) * 1.2 * size, y + 0.15 * size, z + (Math.random() - 0.5) * 1.2 * size);
+      u.life = 1; u.a = Math.min(0.55, 0.18 + strength * 0.06); u.size = size;
+      u.v.set((Math.random() - 0.5) * 2, 0.4 + Math.random() * 0.7, (Math.random() - 0.5) * 2).multiplyScalar(size);
+      s.scale.setScalar(0.5 * size);
     }
   }
 
@@ -339,16 +341,23 @@ async function start() {
     m.quaternion.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
     m.scale.set(0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22, 0.88 + Math.random() * 0.22);
     scene.add(m);
-    const b = { m, p: m.position, v: V(), r: R * (m.scale.x + m.scale.y + m.scale.z) / 3, lift: R, air: true, held: false, claimed: false, dead: false, seq: seq++, gone: false };
+    const b = { m, p: m.position, v: V(), r: R * (m.scale.x + m.scale.y + m.scale.z) / 3, lift: R, air: true, held: false, claimed: false, dead: false, seq: seq++, gone: false, spin: V(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(), spinRate: 0 };
     support(b);
     stones.push(b);
     return b;
   }
   function drop() {
     const b = boulder();
-    b.p.set(SLAB.x - 1 + Math.random() * 1.4, 9 + Math.random() * 2, (Math.random() - 0.5) * 2.6);
-    b.v.set(0, -2, 0);
+    b.p.set(SLAB.x - 1 + Math.random() * 1.4, 18 + Math.random() * 2, (Math.random() - 0.5) * 2.6); // falls in from above the frame
+    b.v.set(0, -3, 0); b.spinRate = 1 + Math.random() * 2;
   }
+  // A landing: a thud you can feel, and for the big ones a small jolt of the camera.
+  function impact(b, hit) {
+    sfx.thud(hit, panOf(b.p));
+    if (hit > 8 && !reduce) shake = Math.max(shake, Math.min(0.2, (hit - 8) * 0.02));
+  }
+  const _sp = V();
+  function panOf(p) { _sp.copy(p).project(cam); return clamp(_sp.x * 0.8, -0.9, 0.9); }
   function remove(b) { b.gone = true; scene.remove(b.m); stones.splice(stones.indexOf(b), 1); }
   const waiting = (b) => !b.gone && !b.held && !b.claimed && !b.dead && !b.out && b.fade === undefined;
 
@@ -360,12 +369,13 @@ async function start() {
       v.y -= G * dt;
       p.addScaledVector(v, dt);
       roll(b, v.x * dt * 0.4, v.z * dt * 0.4);
+      if (b.spinRate > 0.01) { b.m.quaternion.premultiply(_q.setFromAxisAngle(b.spin, b.spinRate * dt)); support(b); }
       const f = floorAt(p.x, p.z) + b.lift;
       if (p.y <= f) {
         const [gx, gz] = grad(p.x, p.z), vg = gx * v.x + gz * v.z, hit = vg - v.y;
-        p.y = f;
-        if (hit > 3) { v.y = vg + hit * 0.2; v.x *= 0.8; v.z *= 0.8; puff(p.x, f - b.lift, p.z, 6, hit); }
-        else { b.air = false; v.y = vg; if (hit > 1.2) puff(p.x, f - b.lift, p.z, 3, hit); }
+        p.y = f; b.spinRate *= 0.4;
+        if (hit > 3) { v.y = vg + hit * 0.2; v.x *= 0.8; v.z *= 0.8; puff(p.x, f - b.lift, p.z, 6, hit); impact(b, hit); }
+        else { b.air = false; v.y = vg; if (hit > 1.2) { puff(p.x, f - b.lift, p.z, 3, hit); impact(b, hit); } }
       }
       return;
     }
@@ -408,6 +418,7 @@ async function start() {
       }
       const rv = (b.v.x - a.v.x) * _n.x + (b.v.y - a.v.y) * _n.y + (b.v.z - a.v.z) * _n.z;
       if (rv < 0) {
+        if (rv < -1.2) sfx.knock(-rv, panOf(a.p));
         const jn = (-(1 + 0.25) * rv) / (wa + wb);
         a.v.addScaledVector(_n, -jn * wa); b.v.addScaledVector(_n, jn * wb);
       }
@@ -424,6 +435,7 @@ async function start() {
   // ---- Workers: the rigged Soldier, one per lane. Walk and run play at the speed the body moves, so
   // feet don't skate. Pushing leans the whole body into the rock and plants both hands on it.
   const clip = (name) => soldier.animations.find((a) => a.name === name);
+  let FOOT0 = Infinity; // ankle height when a foot is planted, measured from the walk and run
   function natural(name, fallback) {
     const root = soldier.scene, mixer = new THREE.AnimationMixer(root), act = mixer.clipAction(clip(name));
     act.play();
@@ -433,6 +445,7 @@ async function start() {
     const speeds = [];
     for (const P of tracks) {
       const low = Math.min(...P.map((p) => p.y));
+      FOOT0 = Math.min(FOOT0, low);
       for (let i = 1; i < P.length; i++) if (P[i].y < low + 0.03 && P[i - 1].y < low + 0.03) speeds.push(Math.abs(P[i].z - P[i - 1].z) / (dur / N));
     }
     speeds.sort((a, b) => a - b);
@@ -440,9 +453,17 @@ async function start() {
     return s > 0.3 && s < 8 ? s : fallback;
   }
   const WALK = natural("Walk", 1.4), RUN = natural("Run", 3.6);
+  if (!Number.isFinite(FOOT0)) FOOT0 = 0.1;
   soldier.scene.updateMatrixWorld(true);
   const bonePos = (n) => soldier.scene.getObjectByName("mixamorig" + n).getWorldPosition(V());
   const SH = clamp(bonePos("LeftArm").y, 1.2, 1.7);
+  const HIP = clamp(bonePos("Hips").y, 0.75, 1.15);
+  const LEG = bonePos("LeftUpLeg").distanceTo(bonePos("LeftLeg")) + bonePos("LeftLeg").distanceTo(bonePos("LeftFoot"));
+  // Pushing: TILT of the lean tips the whole body from the ankles, so the drive leg runs back in a
+  // line with it; the rest pitches the pelvis and bends the back. The hips sink DROP metres and the
+  // steps shorten to STRIDE of a walking step.
+  const TILT = 0.2, DROP = 0.06, STRIDE = 0.6;
+  const shoulderAt = (lean) => [Math.sin(lean * TILT) * (HIP - DROP) + Math.sin(lean) * (SH - HIP), Math.cos(lean * TILT) * (HIP - DROP) + Math.cos(lean) * (SH - HIP)];
   const ARM = clamp(bonePos("LeftArm").distanceTo(bonePos("LeftForeArm")) + bonePos("LeftForeArm").distanceTo(bonePos("LeftHand")), 0.4, 0.8);
   const faceTo = (dx, dz) => Math.atan2(-dx, -dz); // the Soldier faces -z
   const steepness = (x, z, d) => { const [gx, gz] = grad(x, z); return Math.atan(gx * d.x + gz * d.z); };
@@ -457,7 +478,12 @@ async function start() {
     const w = {
       model, mixer, acts, lane, home, x: home.x, z: home.z, face: faceTo(-4 - home.x, -home.z) + (Math.random() - 0.5) * 0.8,
       spd: 0, lean: 0, leanT: 0, poseW: 0, poseT: 0, scrabble: false, state: "idle", t: 0, b: null, ev: null, d: V(1, 0, 0), up: false,
-      bones: { neck: bone("Neck"), arms: [["LeftArm", "LeftForeArm", "LeftHand"], ["RightArm", "RightForeArm", "RightHand"]].map((a) => a.map(bone)) },
+      pb: V(), pr: R, feet: [{ up: false, p: V() }, { up: false, p: V() }],
+      bones: {
+        neck: bone("Neck"), hips: bone("Hips"), spine: ["Spine", "Spine1", "Spine2"].map(bone),
+        arms: [["LeftArm", "LeftForeArm", "LeftHand"], ["RightArm", "RightForeArm", "RightHand"]].map((a) => a.map(bone)),
+        legs: [["LeftUpLeg", "LeftLeg", "LeftFoot"], ["RightUpLeg", "RightLeg", "RightFoot"]].map((a) => a.map(bone)),
+      },
     };
     scene.add(model);
     return w;
@@ -476,19 +502,28 @@ async function start() {
     }
     return d < 0.1;
   }
-  // Where to stand so the shoulders are an arm's length from the rock, leaning `lean` into it.
+  // Where hands go on a rock: its back, measured along the slope and a little below its middle, so
+  // going uphill they push low and forward instead of reaching over their heads.
+  const _ds = V(), _dn = V(), _ct = V();
+  function contact(o, p, r, d) {
+    const [gx, gz] = grad(p.x, p.z);
+    _ds.set(d.x, gx * d.x + gz * d.z, d.z).normalize();
+    _dn.set(-gx, 1, -gz).normalize();
+    return o.copy(p).addScaledVector(_ds, -r * 0.86).addScaledVector(_dn, -r * 0.28);
+  }
+  // Where to stand so the shoulders are a slightly bent arm's length from that contact, leaning `lean`.
   const _f = V();
   function stance(b, d, lean) {
-    const goal = b.r + ARM * 0.72, sl = Math.sin(lean) * SH, cl = Math.cos(lean) * SH; // hands on the rock, elbows a little bent
-    let lo = 0.3, hi = 3.6;
+    const c = contact(_ct, b.p, b.r, d), [sl, cl] = shoulderAt(lean), goal = ARM * 0.85;
+    let lo = b.r * 0.9 + sl, hi = 4;
     for (let k = 0; k < 14; k++) {
       const s = (lo + hi) / 2, fx = b.p.x - d.x * s, fz = b.p.z - d.z * s, fy = ground(fx, fz);
-      if (Math.hypot(fx + d.x * sl - b.p.x, fy + cl - b.p.y, fz + d.z * sl - b.p.z) < goal) lo = s; else hi = s;
+      if (Math.hypot(fx + d.x * sl - c.x, fy + cl - c.y, fz + d.z * sl - c.z) < goal) lo = s; else hi = s;
     }
     const s = (lo + hi) / 2;
     return _f.set(b.p.x - d.x * s, 0, b.p.z - d.z * s);
   }
-  const leanFor = (b, d) => 0.25 + 0.7 * Math.max(0, steepness(b.p.x, b.p.z, d));
+  const leanFor = (b, d) => 0.85 + 0.35 * Math.max(0, steepness(b.p.x, b.p.z, d));
 
   let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null;
   const _d = V();
@@ -522,20 +557,22 @@ async function start() {
           if (w.ev === "ok") { b.held = false; b.out = true; b.air = false; b.v.set(2.6, 0, 0); w.state = "rest"; w.t = 1.4; w.b = null; }
           else { w.state = "strain"; w.t = 0.9; }
         }
-        if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; }
-      } else { // strain: legs scrabble, the rock rocks, then it gets away from them
-        w.t -= dt; w.scrabble = true;
-        speed = Math.sin(w.t * 18) * 0.25;
+        if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; sfx.chime(panOf(b.p)); }
+      } else { // strain: the rock wins by inches. Boots churn and slide back, then it gets away from them
+        w.t -= dt; w.scrabble = true; w.leanT = lean + 0.15;
+        speed = -(0.06 + (0.9 - w.t) * 0.45) + Math.sin(w.t * 23) * 0.05;
         if (w.t <= 0) {
-          b.held = false; b.claimed = false; b.air = false; b.v.set(-0.4, 0, 0);
-          if (w.ev === "dead") { b.dead = true; b.v.z = 1.6; b.m.material = MAT.bad; deadQueue.push(b); }
+          b.held = false; b.claimed = false; b.air = false; b.v.set(-0.9 * d.x, 0, -0.9 * d.z);
+          if (w.ev === "dead") { b.dead = true; b.v.z = 1.6; b.m.material = MAT.bad; deadQueue.push(b); sfx.dead(panOf(b.p)); }
           else { b.m.material = MAT.warn; slipped++; }
+          sfx.slip(panOf(b.p));
           w.state = "dodge"; w.t = 0.7; w.side = w.lane > 6 ? -1 : 1; w.b = null; w.watch = b;
         }
       }
       if (w.b) {
         w.spd += (Math.abs(speed) - w.spd) * Math.min(1, dt * 6);
         carry(b, d, w.state === "strain" ? speed : w.spd, dt);
+        w.pb.copy(b.p); w.pr = b.r;
         const f = stance(b, d, w.lean);
         if (w.state === "brace") { w.x += (f.x - w.x) * Math.min(1, dt * 8); w.z += (f.z - w.z) * Math.min(1, dt * 8); }
         else { w.x = f.x; w.z = f.z; }
@@ -586,34 +623,74 @@ async function start() {
     bone.quaternion.copy(_qb.invert().multiply(_qa));
     bone.updateMatrixWorld(true);
   }
-  const _r = V(), _sh = V(), _nk = V(), _goal = V(), _pole = V(), qYaw = new THREE.Quaternion(), qLean = new THREE.Quaternion();
+  const _r = V(), _sh = V(), _nk = V(), _goal = V(), _pole = V(), _hp = V(), _fw = V(), qYaw = new THREE.Quaternion(), qLean = new THREE.Quaternion();
   function animate(w, dt) {
-    const s = w.spd, idle = clamp(1 - s / 0.45, 0, 1), run = S(s, WALK * 1.25, RUN * 0.75);
-    const weights = w.scrabble ? { Idle: 0, Walk: 1, Run: 0 } : { Idle: idle, Walk: (1 - idle) * (1 - run), Run: (1 - idle) * run };
-    for (const n in weights) w.acts[n].setEffectiveWeight(weights[n]);
-    w.acts.Walk.timeScale = w.scrabble ? 0.9 : clamp(s / WALK, 0.35, 1.7);
-    w.acts.Run.timeScale = clamp(s / RUN, 0.6, 1.4);
-    w.mixer.update(dt);
     w.lean += (w.leanT - w.lean) * Math.min(1, dt * 5);
     w.poseW += (w.poseT - w.poseW) * Math.min(1, dt * 6);
-    w.model.position.set(w.x, ground(w.x, w.z), w.z);
+    const s = w.spd, k = w.poseW, idle = clamp(1 - s / 0.45, 0, 1), run = S(s, WALK * 1.25, RUN * 0.75);
+    const stride = 1 - (1 - STRIDE) * k; // pushing takes short, quick steps that still match the ground speed
+    const weights = w.scrabble ? { Idle: 0, Walk: 1, Run: 0 } : { Idle: idle, Walk: (1 - idle) * (1 - run), Run: (1 - idle) * run };
+    for (const n in weights) w.acts[n].setEffectiveWeight(weights[n]);
+    w.acts.Walk.timeScale = w.scrabble ? 1.5 : clamp(s / (WALK * stride), 0.35, 2);
+    w.acts.Run.timeScale = clamp(s / RUN, 0.6, 1.4);
+    w.mixer.update(dt);
+    const base = ground(w.x, w.z);
+    w.model.position.set(w.x, base, w.z);
     const cur = Math.atan2(Math.sin(w.face - (w.yaw ?? w.face)), Math.cos(w.face - (w.yaw ?? w.face)));
     w.yaw = (w.yaw ?? w.face) + cur * Math.min(1, dt * 7);
-    w.model.quaternion.copy(qYaw.setFromAxisAngle(UP, w.yaw)).multiply(qLean.setFromAxisAngle(XAX, -w.lean));
+    w.model.quaternion.copy(qYaw.setFromAxisAngle(UP, w.yaw));
     w.model.updateMatrixWorld(true);
-    const b = w.b;
-    if (w.poseW < 0.02 || !b) return;
-    const d = w.d, k = w.poseW;
-    _r.crossVectors(d, UP).normalize();
-    turnWorld(w.bones.neck, _r, w.lean * 0.55 * k); // keep looking up the hill, not at the dirt
-    w.bones.neck.getWorldPosition(_nk);
-    for (const arm of w.bones.arms) {
+    const B = w.bones;
+    _fw.set(-Math.sin(w.yaw), 0, -Math.cos(w.yaw));
+    // Feet: where the clip puts them before any lean, pulled in for short steps, set onto the slope.
+    for (let i = 0; i < 2; i++) {
+      const f = w.feet[i], p = B.legs[i][2].getWorldPosition(f.p), h = p.y - base;
+      p.x = w.x + (p.x - w.x) * stride; p.z = w.z + (p.z - w.z) * stride;
+      p.y = ground(p.x, p.z) + h;
+      if (h > FOOT0 + 0.06) f.up = true;
+      else if (f.up && h < FOOT0 + 0.025) { f.up = false; footfall(w, p); }
+    }
+    w.model.quaternion.multiply(qLean.setFromAxisAngle(XAX, -w.lean * TILT));
+    w.model.updateMatrixWorld(true);
+    // Hips sink on bent knees when pushing, and only as far as a downhill foot needs to reach.
+    let drop = DROP * k;
+    for (let i = 0; i < 2; i++) {
+      const p = w.feet[i].p;
+      B.legs[i][0].getWorldPosition(_hp);
+      const hd = Math.hypot(_hp.x - p.x, _hp.z - p.z), reachY = Math.sqrt(Math.max(0, (LEG * 0.97) ** 2 - hd * hd));
+      drop = Math.max(drop, _hp.y - p.y - reachY);
+    }
+    if (drop > 0.002) {
+      B.hips.getWorldPosition(_hp).addScaledVector(UP, -drop);
+      B.hips.parent.worldToLocal(_hp); B.hips.position.copy(_hp); B.hips.updateMatrixWorld(true);
+    }
+    _r.crossVectors(_fw, UP).normalize();
+    const bend = w.lean * (1 - TILT);
+    if (k > 0.02) turnWorld(B.hips, _r, -bend * 0.45); // pelvis pitches forward; the legs are solved after
+    _pole.copy(_fw).addScaledVector(UP, 0.1);
+    for (let i = 0; i < 2; i++) reach(B.legs[i], w.feet[i].p, _pole, 1);
+    if (k < 0.02) return;
+    // The back takes the rest of the lean; the head comes up to look up the hill, not at the dirt.
+    for (const sp of B.spine) turnWorld(sp, _r, (-bend * 0.55) / B.spine.length);
+    if (w.scrabble) turnWorld(B.spine[2], _r, Math.sin(clock * 41) * 0.03); // straining: the back trembles
+    turnWorld(B.neck, _r, w.lean * 0.7);
+    B.neck.getWorldPosition(_nk);
+    // Hands on the rock. After a release they stay reaching for where it was while the pose eases off.
+    const d = w.d;
+    for (const arm of B.arms) {
       arm[0].getWorldPosition(_sh);
       const side = Math.sign(_sh.sub(_nk).dot(_r)) || 1;
-      _goal.copy(b.p).addScaledVector(d, -b.r * 0.92).addScaledVector(_r, side * 0.28).addScaledVector(UP, 0.18);
+      contact(_goal, w.pb, w.pr, d).addScaledVector(_r, side * 0.26);
       _pole.copy(UP).multiplyScalar(-1).addScaledVector(_r, side * 0.7).addScaledVector(d, -0.3);
       reach(arm, _goal, _pole, k);
     }
+  }
+  // A boot hitting the ground: a crunch, and a little dust when running or digging in.
+  function footfall(w, p) {
+    const dig = w.poseW > 0.5 || w.scrabble;
+    if (w.spd < 0.3 && !w.scrabble) return;
+    sfx.step(panOf(p), clamp(w.spd / RUN, 0.3, 1) + (dig ? 0.5 : 0));
+    if (w.spd > WALK * 1.3 || dig) puff(p.x, ground(p.x, p.z), p.z, 1, 0.15, 0.3);
   }
 
   // A free worker takes the oldest boulder that has come to rest, and the next real event.
@@ -622,7 +699,7 @@ async function start() {
       if (!pending.length) return;
       if (w.state !== "idle" && w.state !== "return") continue;
       let b = null;
-      for (const s of stones) if (waiting(s) && !s.air && s.rest > 0.3 && (!b || s.seq < b.seq)) b = s;
+      for (const s of stones) if (waiting(s) && !s.air && s.rest > 0.3 && s.p.x > SLAB.x + SLAB.len / 2 && (!b || s.seq < b.seq)) b = s; // never one stranded behind the slab
       if (!b) {
         if (!spawnLeft && !stones.some(waiting)) spawnLeft = 1; // the picture fell behind the real queue
         return;
@@ -684,7 +761,7 @@ async function start() {
     for (const s of dust) {
       const u = s.userData; if (u.life <= 0) continue;
       u.life -= dt * 0.55; s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - dt * 1.4);
-      s.scale.setScalar(0.5 + (1 - u.life) * 3); s.material.opacity = Math.max(0, u.life) * u.a;
+      s.scale.setScalar((0.5 + (1 - u.life) * 3) * (u.size || 1)); s.material.opacity = Math.max(0, u.life) * u.a;
     }
     if (flag.userData.pulse > 0) flag.userData.pulse = Math.max(0, flag.userData.pulse - dt * 1.2);
   }
@@ -724,7 +801,7 @@ async function start() {
   // copy on the left sits over open sky. Drag to swing it a little.
   const cam = new THREE.PerspectiveCamera(30, 1, 0.5, 1500);
   const look = V(5.5, 2.6, 0);
-  let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null, clock = 0;
+  let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null, clock = 0, shake = 0;
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
@@ -740,7 +817,7 @@ async function start() {
   function place() {
     const { yaw0 = -0.1, dist = 57, pitch = 0.2 } = cam.userData, a = yaw0 + yaw + sway * 0.05;
     const hand = reduce ? 0 : 1; // a slow, small drift, as if the camera were held
-    cam.position.set(look.x + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand, look.y + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand, look.z + Math.cos(a) * dist);
+    cam.position.set(look.x + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, look.y + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
     cam.lookAt(look.x + Math.sin(clock * 0.19) * 0.06 * hand, look.y, look.z);
   }
   host.addEventListener("pointermove", (e) => {
@@ -821,7 +898,8 @@ async function start() {
     requestAnimationFrame(frame);
     const raw = Math.min(0.5, (now - last) / 1000);
     last = now;
-    if (!visible || document.hidden) return;
+    if (!visible || document.hidden) { sfx.pause(true); return; }
+    sfx.pause(false);
     // Slow device: step quality down after a couple of seconds, until the hill keeps moving.
     if (raw < 0.25) {
       perf.n++; perf.sum += raw;
@@ -843,7 +921,17 @@ async function start() {
       hudT -= dt;
     }
     clock += raw;
+    shake *= Math.exp(-raw * 6);
     grass.uTime.value = clock;
+    if (sfx.on) { // rolling rock: louder the more of it is moving, panned toward where it is
+      let roll = 0, pan = 0;
+      for (const b of stones) {
+        if (b.air || b.fade !== undefined) continue;
+        const sp = Math.hypot(b.v.x, b.v.z) * (b.held ? 0.5 : 1);
+        if (sp > 0.05) { roll += sp; pan += sp * panOf(b.p); }
+      }
+      sfx.update(raw, roll, roll ? pan / roll : 0);
+    }
     for (const w of workers) animate(w, raw);
     const fl = flag.userData.pulse || 0, fp = flagGeo.attributes.position;
     for (let i = 0; i < fp.count; i++) { const x = flagX[i]; fp.setZ(i, (Math.sin(x * 3.2 - clock * 6) * 0.6 + Math.sin(x * 5.1 - clock * 9.3) * 0.25) * (0.16 + fl * 0.2) * (x / 2)); }
@@ -866,6 +954,15 @@ async function start() {
   new ResizeObserver(resize).observe(host);
   resize();
   host.classList.add("ready");
+  const snd = $("snd");
+  if (snd && !reduce) {
+    snd.hidden = false;
+    snd.addEventListener("click", () => {
+      const on = sfx.toggle();
+      snd.setAttribute("aria-pressed", String(on));
+      snd.lastChild.textContent = on ? "Sound on" : "Sound off";
+    });
+  }
   window.relayqHill = { ingest };
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
