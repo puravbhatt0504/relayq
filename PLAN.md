@@ -223,6 +223,69 @@ Today a budget can only be set with SQL, and tenants can't see what they've spen
 - With `METRICS_TOKEN=t`: no header → 401; `Bearer wrong` → 401; `Bearer t` → 200 and the body contains `relayq_jobs_total`.
 - Unset → 200 with no header.
 
+## Phase 15 — Demo hill: "See inside" (the cutaway)
+
+The hill can be cut open to show the machinery under it. The surface keeps doing what it does; underneath, each job's record travels through Postgres, the relay, Redis, backoff and the dead-letter pit as a spark. Storyboard: the "Under the hill" board on the design canvas.
+
+**Files:** `public/demo/assets/hill.js` (new section `// ---- Under the hill`), `public/demo/assets/sound.js` (new one-shots), `src/api/demo.ts` (button, CSS, `hill.js?v=`).
+
+**The cut.** A clipping plane keeps `z ≤ ZC`. Open: `ZC = 12.5`. Closed: `ZC = 1000`, so nothing is clipped. It clips the terrain, grass, pebbles, outcrops and slab. A cap mesh fills the cut face from `ground(x, ZC)` down to y −40, for x −120 to 140. The cap has rock texture, strata that darken with depth and a topsoil band, and holes where the rooms are, with a shaded rim. While open, waiting boulders are held at `z ≤ ZC − r`.
+
+**Rooms** are open-front boxes behind the cut, at `x0..x1, y0..y1`, `depth` metres deep. They are lit only by their own lanterns.
+
+| room | x | y | depth | inside |
+|---|---|---|---|---|
+| shaft A (slab → vault) | −9.0..−8.2 | −1.6..surface | 2 | |
+| vault (Postgres) | −12.5..−6.5 | −5.6..−1.6 | 3.5 | 4×12 shelf of tablets; sign `POSTGRES` / `N rows` |
+| relay tunnel | −6.5..−3.5 | −4.8..−3.6 | 2.5 | iron pipe; sign `RELAY` |
+| cistern (Redis) | −3.5..2.5 | −6.2..−2.4 | 3.5 | 4×8 rack of slots; sign `REDIS` / `N waiting` |
+| lift B | −0.6..0.2 | −2.4..surface | 2 | |
+| backoff pocket | 3.5..8.0 | −4.4..−2.2 | 3 | amber embers; sign `BACKOFF` / `N retrying` |
+| shaft C | 6.2..7.0 | −2.2..surface | 2 | |
+| chute | 7.4..8.0 | −6.5..−4.4 | 2 | |
+| pit (dead letters) | 6.5..11.0 | −10.5..−6.5 | 3.5 | red embers on the floor; sign `DEAD LETTERS` / `N` |
+| shaft E (flag) | 14.6..15.4 | −1.6..surface | 2 | |
+| conduit | 15.0..60 | −1.6..−0.6 | 2 | iron pipe; sign `WEBHOOK` / `to your server` (left of shaft E) |
+
+**Counts.** Each room shows a number that follows a target, on a sign carved into the cut face above the room. With the cut open, a spark's arrival moves it one step, never past the target. If no spark of that kind has flown for 1.5 s, every 0.15 s it closes a quarter of the gap (at least 1). With the cut closed, it equals the target.
+- vault = boulders that have landed (all time).
+- cistern = waiting grey boulders + `spawnLeft`.
+- backoff = waiting amber boulders.
+- pit = dead letters (all time).
+
+**Sparks.** Each spark flies a Catmull-Rom path through these rooms at z = `ZC − 0.9`. At most 24 fly at once; extras are skipped, and the counts reconcile.
+
+| event | path | on arrival |
+|---|---|---|
+| slab landing | slab → shaft A → vault shelf | the tablet flashes; then relay spark → tunnel → cistern slot |
+| dispatch | cistern (amber: backoff) → lift B (amber: shaft C) → boulder | |
+| slip | boulder → shaft C → backoff | |
+| dead | boulder → shaft C → backoff → chute → pit | |
+| delivery | flag → shaft E → conduit → off screen | |
+
+**Choreography,** in seconds from the press:
+- Open:
+  - camera eases 0→2.2 to the side-on pose: yaw 0, pitch 0.05, look y −3.2;
+  - the cut sweeps `ZC` 26→12.5 over 0.3→1.5, with dust along its top edge;
+  - the rooms carve open one after another, 0.12 s apart, from 1.5, each taking 0.5 s;
+  - the lanterns light left to right over 2.4→3.0.
+- Close: the rooms shut over 0→0.5, the cut sweeps back 0.4→1.2, the camera returns 0→1.4, then `ZC = 1000`.
+- Reduced motion: the final state, with no animation.
+- Callout pills fade out while open.
+
+**Sound:** `grind` (the cut), `crack` (each room), `clink` (tablet or slot), `zip` (spark, quiet), and an underground hum bed scaled by how open the cut is.
+
+**Done:**
+- With `?debug`, `relayqHill.debug()` returns `{xr, zc, open:[...], shown:{vault,queue,backoff,pit}, target:{...}, sparks}`.
+- Playwright, desktop 1440×900:
+  - C1: press "See inside". After 3.2 s: `zc === 12.5`, every `open === 1`, `aria-pressed="true"`, no console errors.
+  - C2: Run 100 jobs while open. Within 15 s `shown.vault ≥ 20`. When the run settles (`target` unchanged for 3 s), `shown` deep-equals `target` within 3 s.
+  - C3: press again. After 1.8 s `zc === 1000` and the pills are visible.
+  - C4: rAF rate ≥ 60 fps over 2 s while sparks fly.
+  - C5: with `reducedMotion: "reduce"`, one press gives `zc === 12.5` and every `open === 1` on the next frame.
+- Screenshots reviewed: open, light, dark, 390×844.
+- `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
+
 ---
 
 ## Out of scope
@@ -244,3 +307,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 13 LLM budgets and usage over HTTP
 - [x] Phase 14 Token-protected /metrics
 - [x] `POST /embed` (sync embeddings for interactive use: PulseBoard search query and duplicate check; bulk stays on `embed.batch`). `test/embed-api.test.ts` 3 pass.
+- [x] Phase 15 Demo hill: "See inside" cutaway. Playwright 1440x900: C1 open state exact at 3.3 s, C2 vault 20 at 11.6 s and counts equal targets 5 ms after settle, C3 closed with pills back, C4 71 fps with 13 sparks, C5 reduced motion instant; light, dark and 390x844 reviewed.

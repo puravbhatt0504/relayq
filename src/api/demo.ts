@@ -164,7 +164,8 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
   border:1px solid var(--line);padding:5px 7px;border-radius:6px;white-space:nowrap;pointer-events:none;will-change:transform;
   box-shadow:0 2px 8px rgba(10,20,10,.25);backdrop-filter:blur(6px);transition:opacity .3s}
 .tag small{display:block;margin-top:3px;font:10px/1 var(--mono);color:var(--fg-3)}
-.leads{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;filter:drop-shadow(0 1px 1px rgba(0,0,0,.45))}
+.leads{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;filter:drop-shadow(0 1px 1px rgba(0,0,0,.45));transition:opacity .3s}
+.scene.xr .tag,.scene.xr .leads{opacity:0!important}
 .leads line{stroke:#fff;stroke-opacity:.9;stroke-width:1.25}.leads line.dash{stroke-dasharray:3 4}
 .leads circle,.leads ellipse{fill:#fff;stroke:rgba(0,0,0,.35);stroke-width:1}
 .hud{position:absolute;right:24px;bottom:24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;font:12px var(--mono);color:var(--fg-3);
@@ -176,13 +177,17 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .hint{position:absolute;right:24px;bottom:72px;margin:0;font-size:13px;color:var(--fg-2);transition:opacity .4s;pointer-events:none;max-width:280px;
   background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 12px;backdrop-filter:blur(6px)}
 .hint.off{opacity:0}
-.snd{position:absolute;right:24px;top:24px;display:inline-flex;align-items:center;gap:8px;font:500 12px var(--font);color:var(--fg-2);cursor:pointer;
+.ctl{position:absolute;right:24px;top:24px;display:flex;gap:8px}
+.snd{display:inline-flex;align-items:center;gap:8px;font:500 12px var(--font);color:var(--fg-2);cursor:pointer;
   background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:7px 11px;backdrop-filter:blur(6px);transition:color .2s,transform .1s}
 .snd:hover{color:var(--fg)}.snd:active{transform:translateY(1px)}.snd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .eq{display:inline-flex;align-items:flex-end;gap:2px;height:10px}.eq i{width:2px;height:5px;border-radius:1px;background:var(--fg-3)}.eq i:nth-child(2){height:9px}.eq i:nth-child(3){height:6px}
 .snd[aria-pressed=true]{color:var(--fg)}.snd[aria-pressed=true] .eq i{background:var(--accent);animation:eq .9s ease-in-out infinite alternate}
 .snd[aria-pressed=true] .eq i:nth-child(2){animation-delay:-.3s}.snd[aria-pressed=true] .eq i:nth-child(3){animation-delay:-.6s}
 @keyframes eq{from{height:3px}to{height:10px}}
+.cut{position:relative;width:11px;height:11px;border:1.5px solid currentColor;border-radius:2px;overflow:hidden}
+.cut::after{content:"";position:absolute;left:0;right:0;bottom:0;height:45%;background:var(--fg-3);transition:background .2s}
+.snd[aria-pressed=true] .cut::after{background:var(--accent)}
 .nogl{position:absolute;inset:0;display:grid;place-items:center;padding:32px;text-align:center;color:var(--fg-2);font-size:14.5px}
 
 /* Panels */
@@ -286,7 +291,7 @@ footer nav{gap:24px}
 @media (max-width:640px){
   .wrap{padding:0 16px}nav.top{display:none}
   section{padding:64px 0}
-  .scene{height:400px}.hint{display:none}.snd{top:12px;right:16px}.hud{left:16px;right:16px;gap:12px}
+  .scene{height:400px}.hint{display:none}.ctl{top:12px;right:16px}.hud{left:16px;right:16px;gap:12px}
   .tag{font-size:10px;padding:4px 5px}.tag small{font-size:9px}
   .flow,.types{grid-template-columns:1fr;gap:28px}
   .bento{grid-template-columns:1fr}.tile.hero-t,.tile.wide{grid-column:auto}.tile.wide{flex-direction:column;align-items:flex-start}
@@ -316,7 +321,10 @@ footer nav{gap:24px}
 
   <div class="scene" id="scene">
     <canvas id="gl" role="img" aria-label="A 3D hill driven by live data. Each job is a boulder: it drops in through the API, lands on the Postgres slab, waits in line at the foot of the hill, and a worker pushes it up to the webhook flag at the top. Failed attempts roll back down and wait to be pushed again."></canvas><div class="scrim"></div>
-    <button class="snd" id="snd" type="button" aria-pressed="false" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>Sound off</span></button>
+    <div class="ctl">
+      <button class="snd" id="xray" type="button" aria-pressed="false" hidden><span class="cut" aria-hidden="true"></span><span>See inside</span></button>
+      <button class="snd" id="snd" type="button" aria-pressed="false" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>Sound off</span></button>
+    </div>
     <div class="hud" aria-hidden="true">
       <span class="live" id="live"><i></i><span id="liveText">Connecting</span></span>
       <span>in line <b id="hq">0</b></span><span>climbing <b id="hw">0</b></span><span>at the top <b id="hd">0</b></span><span>rolled back <b id="hs">0</b></span>
@@ -507,5 +515,5 @@ footer nav{gap:24px}
 })();
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=7"></script>
+<script type="module" src="/demo/assets/hill.js?v=8"></script>
 </body></html>`;

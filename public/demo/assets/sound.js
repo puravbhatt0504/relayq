@@ -4,7 +4,7 @@
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 export function createSound() {
-  let ctx = null, out = null, noise = null, on = false, paused = false, wind = null, rumble = null, gravel = null, clock = 0, voice = 0;
+  let ctx = null, out = null, noise = null, on = false, paused = false, wind = null, rumble = null, gravel = null, hum = null, drone = null, clock = 0, voice = 0;
   const budget = { t: 0, n: 0 }; // one-shots per 100 ms, so a hundred landings don't turn into one roar
 
   function buffer(fill) {
@@ -30,6 +30,10 @@ export function createSound() {
     wind = bed(brown, "bandpass", 420, 0.6);
     rumble = bed(brown, "lowpass", 150, 0.7);
     gravel = bed(noise, "bandpass", 1500, 0.9);
+    // Under the hill: a low room tone, and two slightly detuned sines that beat like a far machine.
+    hum = bed(brown, "lowpass", 90, 0.9);
+    drone = ctx.createGain(); drone.gain.value = 0; drone.connect(out);
+    for (const f of [55, 55.7]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(drone); o.start(); }
   }
 
   const env = (param, t, a, peak, d) => {
@@ -79,12 +83,15 @@ export function createSound() {
       paused = p;
       if (on) out.gain.setTargetAtTime(p ? 0 : 0.9, ctx.currentTime, 0.1);
     },
-    // Called every frame: wind drifts on its own; rumble and gravel follow how much rock is rolling.
-    update(dt, roll, pan) {
+    // Called every frame: wind drifts on its own; rumble and gravel follow how much rock is rolling;
+    // the hum follows how far the hill is cut open (`under`, 0..1).
+    update(dt, roll, pan, under = 0) {
       if (!on || paused) return;
       clock += dt;
       const t = ctx.currentTime, gust = 0.5 + 0.5 * Math.sin(clock * 0.31) * Math.sin(clock * 0.13 + 1);
-      wind.g.gain.setTargetAtTime(0.05 + 0.08 * gust, t, 0.6);
+      wind.g.gain.setTargetAtTime((0.05 + 0.08 * gust) * (1 - 0.5 * under), t, 0.6);
+      hum.g.gain.setTargetAtTime(under * 0.45, t, 0.4);
+      drone.gain.setTargetAtTime(under * 0.035, t, 0.4);
       wind.f.frequency.setTargetAtTime(300 + 260 * gust, t, 0.8);
       wind.p.pan.setTargetAtTime(Math.sin(clock * 0.07) * 0.5, t, 1);
       const r = clamp(roll / 6, 0, 1);
@@ -153,6 +160,40 @@ export function createSound() {
       shot(pan, 0.4, (t, d) => {
         tone(t, d, 196, 98, 0.01, 0.7, 0.3, "triangle");
         tone(t + 0.02, d, 185, 92, 0.01, 0.7, 0.18, "triangle");
+      });
+    },
+    // The hill being cut open: stone ground through, rising as the cut moves.
+    grind(pan) {
+      shot(pan, 0.5, (t, d) => {
+        const f = burst(t, d, "bandpass", 260, 2, 0.15, 1.2, 0.7);
+        f.frequency.exponentialRampToValueAtTime(950, t + 1.35);
+        burst(t, d, "lowpass", 170, 0.8, 0.2, 1.1, 0.8);
+        tone(t, d, 52, 38, 0.2, 1.1, 0.3, "triangle");
+      });
+    },
+    // A chamber breaking open: a sharp crack, then grit trickling down.
+    crack(pan) {
+      shot(pan, 0.3, (t, d) => {
+        burst(t, d, "highpass", 2600, 0.7, 0.001, 0.05, 0.9);
+        burst(t, d, "bandpass", 900, 1.2, 0.002, 0.18, 0.6);
+        tone(t, d, 95, 45, 0.003, 0.25, 0.45);
+        burst(t + 0.06, d, "bandpass", 3300, 1.5, 0.02, 0.45, 0.12);
+      });
+    },
+    // A record set down: a small stone-on-stone ring.
+    clink(pan) {
+      shot(pan, 0.1, (t, d) => {
+        const f0 = 2100 + Math.random() * 500;
+        tone(t, d, f0, f0, 0.001, 0.12, 0.5);
+        tone(t, d, f0 * 1.51, f0 * 1.5, 0.001, 0.07, 0.25);
+        burst(t, d, "bandpass", 3500, 2, 0.001, 0.03, 0.3);
+      });
+    },
+    // A spark through the tunnels: a faint rising whisper.
+    zip(pan) {
+      shot(pan, 0.05, (t, d) => {
+        const f = burst(t, d, "bandpass", 1400, 3, 0.04, 0.22, 1);
+        f.frequency.exponentialRampToValueAtTime(4200, t + 0.26);
       });
     },
     // A delivery over the line: the flag snaps and a soft bell.

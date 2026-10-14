@@ -2,13 +2,13 @@
 // happened. The page calls window.relayqHill.ingest(stats) once a second.
 // Assets: Poly Haven rock_07, rocky_terrain_02 and kloofendal_48d_partly_cloudy_puresky (CC0);
 // Soldier.glb from the three.js examples (Mixamo character and animations).
-/* global window, document, console, matchMedia, getComputedStyle, addEventListener, performance, requestAnimationFrame, IntersectionObserver, ResizeObserver */
+/* global window, document, console, matchMedia, getComputedStyle, addEventListener, performance, requestAnimationFrame, IntersectionObserver, ResizeObserver, location, URLSearchParams */
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { createSound } from "./sound.js?v=2";
+import { createSound } from "./sound.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 const host = $("scene"), canvas = $("gl"), hint = $("hint");
@@ -107,6 +107,10 @@ async function start() {
   gl.toneMapping = THREE.ACESFilmicToneMapping;
   gl.shadowMap.enabled = true;
   gl.shadowMap.type = THREE.PCFSoftShadowMap;
+  // "See inside" cuts the hill open: everything nearer the camera than z = cut.constant is clipped.
+  // Closed, the cut is far behind the camera, so nothing is.
+  gl.localClippingEnabled = true;
+  const cut = new THREE.Plane(V(0, 0, -1), 1000), cutAt = [cut];
 
   const manager = new THREE.LoadingManager();
   manager.onProgress = (_url, done, total) => { if (hint) hint.textContent = `Loading the hill, ${done} of ${total} files`; };
@@ -166,7 +170,7 @@ async function start() {
   tDiff.colorSpace = THREE.SRGBColorSpace;
   // The scan is a green upland; the myth's mountain is dry. Its grass is regraded to sun-dried earth.
   const dry = (m) => { m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("#include <map_fragment>", "#include <map_fragment>\n{ float l = dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) ); diffuseColor.rgb = mix( l * vec3( 1.6, 1.25, 0.88 ), diffuseColor.rgb, 0.1 ); }"); }; return m; };
-  const groundMat = dry(new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true }));
+  const groundMat = dry(new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, roughnessMap: tRough, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true, clippingPlanes: cutAt }));
   const NEAR = { x0: -34, x1: 46, z0: -30, z1: 26 };
   const inNear = (x, z) => x > NEAR.x0 + 1 && x < NEAR.x1 - 1 && z > NEAR.z0 + 1 && z < NEAR.z1 - 1;
   function terrain(w, d, cx, cz, step, sink) {
@@ -198,7 +202,7 @@ async function start() {
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute("normal", new THREE.Float32BufferAttribute(Array.from({ length: 7 }, () => [0, 1, 0]).flat(), 3));
     g.setIndex(idx);
-    const mat = new THREE.MeshStandardMaterial({ roughness: 0.9 });
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, clippingPlanes: cutAt });
     const uTime = { value: 0 };
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = uTime;
@@ -255,6 +259,7 @@ async function start() {
   // The scan reads wet in full sun: keep it matte, and a touch greyer so the amber retry tint stands out.
   const matte = (m) => { m.envMapIntensity = 0.6; m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = max( roughnessFactor, 0.8 );"); }; return m; };
   matte(rockMat).color.setRGB(0.9, 0.93, 1);
+  rockMat.clippingPlanes = cutAt;
 
   // ---- The boulders themselves are round, as in every telling of the myth: a sphere weathered by a
   // few octaves of noise, slightly squat. The scan's atlas is mostly smeared padding, so the stone
@@ -309,7 +314,7 @@ async function start() {
     outcrops.castShadow = outcrops.receiveShadow = true;
     const pebbleGeo = new THREE.SphereGeometry(1, 18, 12); // bumps depend on position only, so the seam stays closed
     { const p = pebbleGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 0.8 + 0.35 * (0.5 + 0.5 * Math.sin(p.getX(i) * 12.9 + p.getY(i) * 78.2 + p.getZ(i) * 37.7)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.7, p.getZ(i) * k); } pebbleGeo.computeVertexNormals(); }
-    const pebbles = new THREE.InstancedMesh(pebbleGeo, new THREE.MeshStandardMaterial({ map: rockMat.map, normalMap: rockMat.normalMap, roughness: 0.9, color: 0xb5ada3 }), 70);
+    const pebbles = new THREE.InstancedMesh(pebbleGeo, new THREE.MeshStandardMaterial({ map: rockMat.map, normalMap: rockMat.normalMap, roughness: 0.9, color: 0xb5ada3, clippingPlanes: cutAt }), 70);
     for (let i = 0; i < 70; i++) {
       let x, z;
       do { x = -18 + r() * 44; z = -14 + r() * 30; } while (wear(x, z) > 0.3 || slabTop(x, z) > -Infinity);
@@ -322,7 +327,7 @@ async function start() {
 
   // Postgres: a tilted slab of stone. Boulders land on it and roll off into the hollow.
   const slabTex = (t) => { const c = t.clone(); c.repeat.set(1.2, 1.2); c.needsUpdate = true; return c; };
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(SLAB.len, 2.4, SLAB.wid), dry(new THREE.MeshStandardMaterial({ map: slabTex(tDiff), normalMap: slabTex(tNor), color: 0x8f8a82, roughness: 0.95 })));
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(SLAB.len, 2.4, SLAB.wid), dry(new THREE.MeshStandardMaterial({ map: slabTex(tDiff), normalMap: slabTex(tNor), color: 0x8f8a82, roughness: 0.95, clippingPlanes: cutAt })));
   slab.rotation.z = -SLAB.tilt;
   slab.position.set(SLAB.x - Math.sin(SLAB.tilt) * 1.2, SLAB_TOP - Math.cos(SLAB.tilt) * 1.2, 0);
   slab.castShadow = slab.receiveShadow = true;
@@ -402,7 +407,7 @@ async function start() {
   function drop() {
     const b = boulder();
     b.p.set(SLAB.x - 1 + Math.random() * 1.4, 18 + Math.random() * 2, (Math.random() - 0.5) * 2.6); // falls in from above the frame
-    b.v.set(0, -3, 0); b.spinRate = 1 + Math.random() * 2;
+    b.v.set(0, -3, 0); b.spinRate = 1 + Math.random() * 2; b.fresh = true;
   }
   // A landing: a thud you can feel, and for the big ones a small jolt of the camera.
   function impact(b, hit) {
@@ -427,6 +432,7 @@ async function start() {
       if (p.y <= f) {
         const [gx, gz] = grad(p.x, p.z), vg = gx * v.x + gz * v.z, hit = vg - v.y;
         p.y = f; b.spinRate *= 0.4;
+        if (b.fresh) { b.fresh = false; landed++; under.land(b); }
         if (hit > 3) { v.y = vg + hit * 0.2; v.x *= 0.8; v.z *= 0.8; puff(p.x, f - b.lift, p.z, 6, hit); impact(b, hit); }
         else { b.air = false; v.y = vg; if (hit > 1.2) { puff(p.x, f - b.lift, p.z, 3, hit); impact(b, hit); } }
       }
@@ -577,7 +583,7 @@ async function start() {
   }
   const leanFor = (b, d) => 1.0 + 0.3 * Math.max(0, steepness(b.p.x, b.p.z, d)); // von Stuck: nearly flat, driving from the legs
 
-  let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null;
+  let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null, landed = 0, deadTotal = 0;
   const _d = V();
   function pushDir(w, b) {
     if (!w.up) {
@@ -591,9 +597,9 @@ async function start() {
     w.poseT = 0; w.leanT = 0; w.scrabble = false;
     if (b && b.gone) { w.b = null; w.state = "return"; return; }
     if (w.state === "idle") {
-      walkTo(w, w.home.x, w.home.z, 1.2, dt);
+      walkTo(w, w.home.x, Math.min(w.home.z, cut.constant - 0.7), 1.2, dt); // never standing in the cut
     } else if (w.state === "return") {
-      if (walkTo(w, w.home.x, w.home.z, pending.length > 4 ? RUN * 0.85 : WALK, dt)) w.state = "idle";
+      if (walkTo(w, w.home.x, Math.min(w.home.z, cut.constant - 0.7), pending.length > 4 ? RUN * 0.85 : WALK, dt)) w.state = "idle";
     } else if (w.state === "go") {
       const d = pushDir(w, b), f = stance(b, d, leanFor(b, d));
       if (walkTo(w, f.x, f.z, pending.length > 6 ? RUN * 0.8 : WALK * 1.1, dt)) { w.state = "brace"; w.t = 0; b.held = true; }
@@ -609,14 +615,14 @@ async function start() {
           if (w.ev === "ok") { b.held = false; b.out = true; b.air = false; b.v.set(2.6, 0, 0); w.state = "rest"; w.t = 2.2; w.b = null; w.watch = b; }
           else { w.state = "strain"; w.t = 0.9; }
         }
-        if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; sfx.chime(panOf(b.p)); }
+        if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; sfx.chime(panOf(b.p)); under.deliver(); }
       } else { // strain: the rock wins by inches. Boots churn and slide back, then it gets away from them
         w.t -= dt; w.scrabble = true; w.leanT = lean + 0.15;
         speed = -(0.06 + (0.9 - w.t) * 0.45) + Math.sin(w.t * 23) * 0.05;
         if (w.t <= 0) {
           b.held = false; b.claimed = false; b.air = false; b.v.set(-0.9 * d.x, 0, -0.9 * d.z);
-          if (w.ev === "dead") { b.dead = true; b.v.z = 1.6; b.m.material = MAT.bad; deadQueue.push(b); sfx.dead(panOf(b.p)); }
-          else { b.m.material = MAT.warn; slipped++; }
+          if (w.ev === "dead") { b.dead = true; b.v.z = 1.6; b.m.material = MAT.bad; deadQueue.push(b); sfx.dead(panOf(b.p)); deadTotal++; under.dead(b); }
+          else { b.m.material = MAT.warn; slipped++; under.slip(b); }
           sfx.slip(panOf(b.p));
           w.state = "dodge"; w.t = 0.7; w.side = w.lane > 6 ? -1 : 1; w.b = null; w.watch = b;
         }
@@ -763,6 +769,7 @@ async function start() {
         return;
       }
       b.claimed = true; w.b = b; w.ev = pending.shift(); w.state = "go"; w.up = false;
+      under.go(b);
       w.goal = w.ev === "ok" ? X2 - 0.3 : X1 - 3.6 + Math.random() * 2.8; // as in the myth, it gets away near the top
     }
   }
@@ -801,6 +808,7 @@ async function start() {
     for (const w of workers) stepWorker(w, dt);
     for (const b of stones) if (!b.held) physics(b, dt);
     collide();
+    if (cut.constant < 100) for (const b of stones) if (!b.held && b.p.z > cut.constant - b.r) { b.p.z = cut.constant - b.r; b.v.z = Math.min(0, b.v.z); }
     for (let i = stones.length - 1; i >= 0; i--) {
       const b = stones[i];
       if (b.out && !b.air && b.v.lengthSq() < 0.05 && b.p.x > X2 - 1) b.v.x += 0.6; // stalled on the brow: nudge it over
@@ -869,14 +877,21 @@ async function start() {
     cam.userData = { yaw0: wide ? -0.1 : -0.25, dist: wide ? 57 : Math.max(50, 54 / cam.aspect), pitch: wide ? 0.2 : 0.26 };
     look.x = wide ? 3.5 : 3;
     cam.filmOffset = (wide ? -0.2 : 0) * cam.getFilmWidth();
+    // Side-on, for the cutaway: fit x -13.5..16.5 on the cut face into the part of the frame the
+    // copy doesn't cover (the right 56% on wide screens, where the film offset shifts the picture).
+    const tanH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)), f = wide ? 0.56 : 1, shift = wide ? 0.1 / (tanH * cam.aspect) : 0, span = 30 / f;
+    cam.userData.sdist = ZO + span / 2 / (tanH * cam.aspect);
+    cam.userData.slx = -13.5 - span * (0.5 - f - shift);
     cam.updateProjectionMatrix();
     render();
   }
   function place() {
-    const { yaw0 = -0.1, dist = 57, pitch = 0.2 } = cam.userData, a = yaw0 + yaw + sway * 0.05;
+    // xs.cam blends from the usual view to the side-on one for the cutaway.
+    const { yaw0 = -0.1, dist: d0 = 57, pitch: p0 = 0.2, sdist = 80, slx = 0 } = cam.userData, k = xs.cam, mix = (a, b) => a + (b - a) * k;
+    const a = mix(yaw0, 0) + (yaw + sway * 0.05) * (1 - 0.5 * k), dist = mix(d0, sdist), pitch = mix(p0, 0.05), lx = mix(look.x, slx), ly = mix(look.y, -3.2);
     const hand = reduce ? 0 : 1; // a slow, small drift, as if the camera were held
-    cam.position.set(look.x + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, look.y + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
-    cam.lookAt(look.x + Math.sin(clock * 0.19) * 0.06 * hand, look.y, look.z);
+    cam.position.set(lx + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, ly + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
+    cam.lookAt(lx + Math.sin(clock * 0.19) * 0.06 * hand, ly, look.z);
   }
   host.addEventListener("pointermove", (e) => {
     const r = host.getBoundingClientRect();
@@ -928,6 +943,404 @@ async function start() {
       if (t.flat) { t.pin.setAttribute("rx", 6 * sc); t.pin.setAttribute("ry", 2.4 * sc); } else t.pin.setAttribute("r", 3 * sc);
     }
   }
+  // ---- Under the hill. "See inside" cuts the hill open along z = ZO like a geology plate: the clip
+  // plane removes everything nearer the camera, a cap closes the cut face, and behind it are the
+  // rooms each job's record passes through as a spark: the Postgres vault, the relay, the Redis
+  // cistern, the backoff pocket and the dead-letter pit. The rooms draw only while the hill is open,
+  // lit by their own lanterns rather than the sun.
+  const ZO = 12.5;
+  const xs = { cam: 0, zc: 1000, open: [], lit: [] }; // what the camera, the cut, each room and each lantern show now
+  const under = (() => {
+    const ZS = ZO - 0.9, ZB = ZO - 3.2, NL = 6;
+    const surf = (x) => ground(x, ZO);
+    // x, y (null: up to the surface) and depth of each room. `join` stretches its hole into the room
+    // it opens onto (left, right, down, up), so joined rooms read as one opening.
+    const ROOMS = [
+      { id: "vault", x: [-12.5, -6.5], y: [-5.6, -1.6], d: 3.5 },
+      { id: "shaftA", x: [-9.0, -8.2], y: [-1.6, null], d: 2, join: [0, 0, 0.4, 0] },
+      { id: "relay", x: [-6.5, -3.5], y: [-4.8, -3.6], d: 2.5, join: [0.4, 0.4, 0, 0] },
+      { id: "cistern", x: [-3.5, 2.5], y: [-6.2, -2.4], d: 3.5 },
+      { id: "liftB", x: [-0.6, 0.2], y: [-2.4, null], d: 2, join: [0, 0, 0.4, 0] },
+      { id: "backoff", x: [3.5, 8.0], y: [-4.4, -2.2], d: 3 },
+      { id: "shaftC", x: [6.2, 7.0], y: [-2.2, null], d: 2, join: [0, 0, 0.4, 0] },
+      { id: "pit", x: [6.5, 11.0], y: [-10.5, -6.5], d: 3.5 },
+      { id: "chute", x: [7.4, 8.0], y: [-6.5, -4.4], d: 2, join: [0, 0, 0.4, 0.4] },
+      { id: "shaftE", x: [14.6, 15.4], y: [-1.6, null], d: 2 },
+      { id: "conduit", x: [15.0, 60], y: [-1.6, -0.6], d: 2 },
+    ];
+    xs.open = ROOMS.map(() => 0);
+
+    // Lantern light: each room material adds up NL point lanterns by hand, so the sun never reaches
+    // underground and the grass doesn't pay for six extra lights.
+    const lampP = { value: Array.from({ length: NL }, () => V()) }, lampC = { value: Array.from({ length: NL }, () => V()) }, amb = { value: 0.08 };
+    const ROOM_VS = [
+      "varying vec3 vW; varying vec3 vN; varying vec3 vC;",
+      "void main() {",
+      "  mat4 m = modelMatrix;",
+      "  #ifdef USE_INSTANCING",
+      "  m = m * instanceMatrix;",
+      "  #endif",
+      "  vec4 w = m * vec4( position, 1.0 );",
+      "  vW = w.xyz; vN = normalize( mat3( m ) * normal ); vC = vec3( 1.0 );",
+      "  #ifdef USE_INSTANCING_COLOR",
+      "  vC = instanceColor;",
+      "  #endif",
+      "  gl_Position = projectionMatrix * viewMatrix * w;",
+      "}",
+    ].join("\n");
+    // Stone from the ground scan, triplanar in world space. Instance colours above 1 glow; `glow`
+    // materials (embers) are all glow.
+    const ROOM_FS = [
+      "uniform sampler2D map; uniform vec3 tint; uniform float glow; uniform float spec; uniform float amb;",
+      "uniform vec3 uL[ NL ]; uniform vec3 uLC[ NL ];",
+      "varying vec3 vW; varying vec3 vN; varying vec3 vC;",
+      "void main() {",
+      "  vec3 n = normalize( vN ) * ( gl_FrontFacing ? 1.0 : -1.0 );",
+      "  vec3 tw = pow( abs( n ), vec3( 4.0 ) ); tw /= tw.x + tw.y + tw.z;",
+      "  vec3 p = vW * 0.4;",
+      "  vec3 tx = texture2D( map, p.yz ).rgb * tw.x + texture2D( map, p.zx ).rgb * tw.y + texture2D( map, p.xy ).rgb * tw.z;",
+      "  float l = dot( tx, vec3( 0.3, 0.59, 0.11 ) );",
+      "  vec3 a = l * 1.6 * tint * min( vC, vec3( 1.0 ) ) * ( 1.0 - glow );",
+      "  vec3 v = normalize( cameraPosition - vW ), c = a * amb;",
+      "  for ( int i = 0; i < NL; i++ ) {",
+      "    vec3 d = uL[ i ] - vW; float r2 = dot( d, d ); vec3 L = d * inversesqrt( r2 );",
+      "    c += uLC[ i ] / ( 1.0 + 0.5 * r2 ) * ( a * max( dot( n, L ), 0.0 ) + spec * pow( max( dot( n, normalize( L + v ) ), 0.0 ), 40.0 ) );",
+      "  }",
+      "  c += glow * vC * ( 0.4 + l ) + max( vC - 1.0, 0.0 ) * ( 1.0 - glow );",
+      "  gl_FragColor = vec4( c, 1.0 );",
+      "  #include <tonemapping_fragment>",
+      "  #include <colorspace_fragment>",
+      "}",
+    ].join("\n");
+    const roomMat = (tint, o = {}) => new THREE.ShaderMaterial({
+      defines: { NL }, vertexShader: ROOM_VS, fragmentShader: ROOM_FS, side: o.side || THREE.FrontSide,
+      uniforms: { map: { value: tDiff }, tint: { value: new THREE.Color(tint) }, glow: { value: o.glow || 0 }, spec: { value: o.spec || 0 }, amb, uL: lampP, uLC: lampC },
+    });
+    const rockIn = roomMat(0xb3a597, { side: THREE.BackSide }), wood = roomMat(0x8a6040), iron = roomMat(0x3b3836, { spec: 0.6 });
+    const undr = new THREE.Group();
+    undr.visible = false;
+    scene.add(undr);
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    const part = (mat, sx, sy, sz, x, y, z, geo = box) => { const m = new THREE.Mesh(geo, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); undr.add(m); return m; };
+
+    // Rooms: open-fronted boxes seen from inside, their front face on the cut.
+    const holes = ROOMS.map((r) => {
+      const [x0, x1] = r.x, y0 = r.y[0], top = r.y[1] === null, y1 = top ? Math.max(surf(x0), surf(x1)) + 0.02 : r.y[1], j = r.join || [0, 0, 0, 0];
+      part(rockIn, x1 - x0, y1 - y0, r.d, (x0 + x1) / 2, (y0 + y1) / 2, ZO - r.d / 2);
+      return new THREE.Vector4(x0 - j[0], y0 - j[2], x1 + j[1], top ? y1 + 0.6 : y1 + j[3]);
+    });
+    // Mine timbers at the mouths, kept clear of the shafts and tunnels that join them.
+    const T = 0.28, ZT = ZO - 0.35;
+    for (const [x, y0, y1] of [[-12.2, -5.6, -1.6], [2.2, -6.2, -2.4], [3.8, -4.4, -2.2], [6.8, -10.5, -6.5], [10.7, -10.5, -6.5]]) part(wood, T, y1 - y0, T, x, (y0 + y1) / 2, ZT);
+    for (const [x0, x1, y] of [[-12.35, -9.1, -1.9], [0.3, 2.35, -2.7], [3.65, 6.1, -2.5], [8.1, 10.85, -6.8]]) part(wood, x1 - x0, T, T, (x0 + x1) / 2, y, ZT);
+    // Iron pipes: the relay's, and the conduit out to your server, with flanges.
+    const pipe = new THREE.CylinderGeometry(1, 1, 1, 16).rotateZ(Math.PI / 2);
+    part(iron, 3.8, 0.13, 0.13, -5.0, -4.62, ZO - 1.7, pipe);
+    part(iron, 45, 0.17, 0.17, 37.5, -1.38, ZO - 1.3, pipe);
+    for (const x of [-5.8, -4.2]) part(iron, 0.08, 0.18, 0.18, x, -4.62, ZO - 1.7, pipe);
+    for (const x of [17, 20, 23, 26, 29]) part(iron, 0.08, 0.22, 0.22, x, -1.38, ZO - 1.3, pipe);
+
+    // The vault's shelves of tablets (Postgres rows) and the cistern's rack of slots (Redis).
+    const SHELF_Y = [-5.4, -4.5, -3.6, -2.7], RACK_Y = [-5.95, -5.1, -4.25, -3.4];
+    for (const y of SHELF_Y) part(wood, 5.7, 0.07, 0.5, -9.5, y, ZB);
+    for (const y of RACK_Y) part(wood, 5.0, 0.07, 0.45, -0.75, y, ZB);
+    for (const [x, y] of [[-12.35, -3.8], [-6.65, -3.8], [-3.3, -4.2], [1.8, -4.2]]) part(wood, 0.09, 3.6, 0.09, x, y, ZB + 0.22);
+    const tabletAt = (n) => V(-12.08 + (n % 12) * 0.45, SHELF_Y[Math.floor(n / 12) % 4] + 0.275, ZB + 0.05);
+    const slotAt = (n) => V(-2.95 + (n % 8) * 0.62, RACK_Y[Math.floor(n / 8) % 4] + 0.24, ZB + 0.02);
+    const emberAt = (n) => V(3.95 + (n % 8) * 0.42, -4.25, ZO - 0.9 - Math.floor(n / 8) * 0.85);
+    const PIT = Array.from({ length: 24 }, (_, k) => { const r = 0.32 * Math.sqrt(k), a = k * 2.4; return V(8.8 + Math.cos(a) * r * 1.3, -10.34 + Math.max(0, 0.5 - r * 0.3), ZO - 1.9 + Math.sin(a) * r * 0.7); });
+    const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), e4 = new THREE.Euler(), c4 = new THREE.Color(), r4 = rng(11);
+    const fill = (geo, mat, n, at, size, tilt) => {
+      const m = new THREE.InstancedMesh(geo, mat, n);
+      for (let i = 0; i < n; i++) { m.setMatrixAt(i, m4.compose(at(i), q4.setFromEuler(e4.set(tilt * (r4() - 0.6), tilt * (r4() - 0.5) * 2, tilt * (r4() - 0.5), "YXZ")), V(size, size, size))); m.setColorAt(i, c4.setRGB(1, 1, 1)); }
+      undr.add(m);
+      return m;
+    };
+    const tablets = fill(new THREE.BoxGeometry(0.3, 0.48, 0.06), roomMat(0xe9e1d2), 48, tabletAt, 1, 0.15);
+    const balls = fill(boulderGeo, roomMat(0xc9c0b4), 32, slotAt, 0.27, 6);
+    const embers = fill(boulderGeo, roomMat(0xffffff, { glow: 1 }), 16, emberAt, 0.2, 6);
+    const pitEmbers = fill(boulderGeo, roomMat(0xffffff, { glow: 1 }), 24, (i) => PIT[i], 0.22, 6);
+    const tabFlash = new Float32Array(48), ballFlash = new Float32Array(32);
+
+    // Lanterns hang from each room's ceiling, warm, the backoff's amber and the pit's red.
+    const lamps = [[-10.6, -2.15, -1.6, 0xffa860], [-5.0, -3.86, -3.6, 0xffa860], [1.9, -2.85, -2.4, 0xffa860], [4.4, -2.65, -2.2, 0xffb347], [9.8, -7.0, -6.5, 0xff5a3c], [18, -0.86, -0.6, 0xffa860]].map(([x, y, ceil, c], j) => {
+      const z = ZO - 1, col = new THREE.Color(c);
+      lampP.value[j].set(x, y, z);
+      const glass = part(new THREE.MeshBasicMaterial({ color: 0x000000 }), 0.14, 0.2, 0.14, x, y, z);
+      part(iron, 0.2, 0.05, 0.2, x, y + 0.12, z);
+      part(iron, 0.02, ceil - y - 0.12, 0.02, x, (ceil + y + 0.12) / 2, z);
+      const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: dustTex, color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      halo.position.set(x, y, z + 0.1); halo.scale.setScalar(1.8);
+      undr.add(halo);
+      return { col, glass, halo };
+    });
+    xs.lit = lamps.map(() => 0);
+
+    // Signs carved into the cut face above each room, with live counts.
+    const mono = () => getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace";
+    const signs = [
+      { id: "vault", at: [-12.4, -1.45], head: "POSTGRES", key: "vault", sub: (n) => n + (n === 1 ? " row" : " rows") },
+      { id: "relay", at: [-6.35, -3.5], head: "RELAY" },
+      { id: "cistern", at: [-3.4, -2.3], head: "REDIS", key: "queue", sub: (n) => n + " waiting" },
+      { id: "backoff", at: [3.6, -2.1], head: "BACKOFF", key: "backoff", sub: (n) => n + " retrying", ink: "#f3cb8e" },
+      { id: "pit", at: [8.15, -6.4], head: "DEAD LETTERS", key: "pit", sub: (n) => String(n), ink: "#f2a0ae" },
+      { id: "conduit", at: [11.2, -1.5], head: "WEBHOOK", key: "none", sub: () => "to your server" },
+    ].map((s) => {
+      const c = document.createElement("canvas"), sc = small ? 1.9 : 1.55;
+      c.width = 512; c.height = 128;
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(3.2 * sc, 0.8 * sc), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+      m.position.set(s.at[0] + 1.6 * sc, s.at[1] + 0.4 * sc, ZO + 0.03);
+      undr.add(m);
+      return { ...s, g: c.getContext("2d"), tex, m, ri: ROOMS.findIndex((r) => r.id === s.id), n: -1 };
+    });
+    function drawSign(s, n) {
+      const g = s.g, f = mono();
+      g.clearRect(0, 0, 512, 128);
+      g.shadowColor = "rgba(0,0,0,0.75)"; g.shadowBlur = 8; g.shadowOffsetY = 2;
+      g.fillStyle = "rgba(246,239,228,0.95)"; g.font = "600 50px " + f; g.letterSpacing = "4px";
+      g.fillText(s.head, 6, s.sub ? 54 : 84);
+      if (s.sub) { g.fillStyle = s.ink || "rgba(246,239,228,0.8)"; g.font = "500 40px " + f; g.letterSpacing = "1px"; g.fillText(s.sub(n), 6, 112); }
+      s.tex.needsUpdate = true; s.n = n;
+    }
+
+    // The cap: the cut face from the surface down, in the ground scan's stone, banded into strata
+    // that darken with depth under a band of topsoil. Rooms are holes in it, carved open with a
+    // crumbling edge and a shaded rim.
+    const capU = { uR: { value: holes }, uO: { value: ROOMS.map(() => 0) } };
+    const capMat = new THREE.MeshStandardMaterial({ map: tDiff, normalMap: tNor, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 1 });
+    capMat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, capU);
+      sh.vertexShader = "attribute float top;\nvarying float vTop;\nvarying vec3 vCW;\n" + sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvTop = top; vCW = ( modelMatrix * vec4( position, 1.0 ) ).xyz;");
+      sh.fragmentShader = [
+        "#define NR " + ROOMS.length, "uniform vec4 uR[ NR ];", "uniform float uO[ NR ];", "varying float vTop;", "varying vec3 vCW;",
+        "float hsh( vec2 i ) { return fract( sin( dot( i, vec2( 127.1, 311.7 ) ) ) * 43758.5 ); }",
+        "float vn( vec2 p ) { vec2 i = floor( p ), f = fract( p ); f = f * f * ( 3.0 - 2.0 * f ); return mix( mix( hsh( i ), hsh( i + vec2( 1.0, 0.0 ) ), f.x ), mix( hsh( i + vec2( 0.0, 1.0 ) ), hsh( i + vec2( 1.0, 1.0 ) ), f.x ), f.y ); }",
+        sh.fragmentShader,
+      ].join("\n").replace("#include <map_fragment>", [
+        "#include <map_fragment>",
+        "float hole = 1e3;",
+        "for ( int i = 0; i < NR; i++ ) { if ( uO[ i ] <= 0.0 ) continue; vec2 c = ( uR[ i ].xy + uR[ i ].zw ) * 0.5, h = ( uR[ i ].zw - uR[ i ].xy ) * 0.5 * uO[ i ]; vec2 q = abs( vCW.xy - c ) - h; hole = min( hole, max( q.x, q.y ) ); }",
+        "float capN = vn( vCW.xy * 6.0 ) * 0.6 + vn( vCW.xy * 17.0 ) * 0.4;",
+        "if ( hole < -0.06 - 0.1 * capN ) discard;",
+        "float dep = vTop - vCW.y, capL = dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) );",
+        "float band = sin( vCW.y * 2.3 + sin( vCW.x * 0.21 ) * 1.7 + sin( vCW.x * 0.05 ) * 3.0 ) * 0.6 + sin( vCW.y * 7.1 + vCW.x * 0.13 ) * 0.4;",
+        "vec3 rock = capL * mix( vec3( 1.35, 1.1, 0.86 ), vec3( 0.95, 0.92, 0.9 ), smoothstep( 2.0, 14.0, dep ) ) * ( 0.75 + 0.25 * band ) * mix( 1.0, 0.45, smoothstep( 0.0, 26.0, dep ) );",
+        "diffuseColor.rgb = mix( capL * vec3( 0.75, 0.52, 0.34 ), rock, smoothstep( 0.3, 0.7, dep + capN * 0.2 ) );",
+        "diffuseColor.rgb *= mix( 0.35, 1.0, smoothstep( -0.15, 0.7, hole ) );",
+      ].join("\n"));
+    };
+    const CX0 = -120, CST = small ? 0.4 : 0.25, NC = Math.round(260 / CST);
+    const capGeo = new THREE.BufferGeometry(), cp = new Float32Array((NC + 1) * 6), ct = new Float32Array((NC + 1) * 2), cuv = new Float32Array((NC + 1) * 4), ci = [];
+    for (let i = 0; i < NC; i++) { const a = i * 2; ci.push(a, a + 1, a + 2, a + 2, a + 1, a + 3); }
+    capGeo.setIndex(ci);
+    capGeo.setAttribute("position", new THREE.BufferAttribute(cp, 3));
+    capGeo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array((NC + 1) * 6).map((_, i) => (i % 3 === 2 ? 1 : 0)), 3));
+    capGeo.setAttribute("top", new THREE.BufferAttribute(ct, 1));
+    capGeo.setAttribute("uv", new THREE.BufferAttribute(cuv, 2));
+    let capZ = null;
+    function shapeCap(zc) { // the top edge follows the ground along the cut, matching the clipped terrain
+      for (let i = 0; i <= NC; i++) {
+        const x = CX0 + i * CST, y = ground(x, zc) + 0.02;
+        cp.set([x, y, zc, x, -40, zc], i * 6); ct[i * 2] = ct[i * 2 + 1] = y;
+        cuv.set([x / 5, y / 5, x / 5, -8], i * 4);
+      }
+      for (const k of ["position", "top", "uv"]) capGeo.attributes[k].needsUpdate = true;
+      capGeo.computeBoundingSphere();
+      capZ = zc;
+    }
+    const capMesh = new THREE.Mesh(capGeo, capMat);
+    capMesh.visible = false;
+    scene.add(capMesh);
+
+    // Sparks: one per event, flying a smooth path through the rooms, with a short tail.
+    const sparks = Array.from({ length: 24 }, () => {
+      const mk = (s) => { const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: dustTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })); m.scale.setScalar(s); m.visible = false; scene.add(m); return m; };
+      return { head: mk(0.6), trail: [0.48, 0.38, 0.3, 0.22].map(mk), curve: null, t: 0, dur: 1, k: null, done: null };
+    });
+    const COL = { job: new THREE.Color(0xfff0d0), warn: new THREE.Color(0xffb347), bad: new THREE.Color(0xff4d6a), ok: new THREE.Color(0x3ccf91) };
+    const KEYS = ["vault", "queue", "backoff", "pit"], per = (v) => Object.fromEntries(KEYS.map((k) => [k, v]));
+    const shown = per(0), lastK = per(-Infinity), inflight = per(0), rec = per(0);
+    let uclock = 0, boost = 1.4;
+    const XR = { on: false, t: 0, from: null };
+    const live = () => XR.on && !XR.from && !reduce;
+    function targets() {
+      let grey = 0, amber = 0;
+      for (const b of stones) if (waiting(b)) { if (b.m.material === MAT.warn) amber++; else if (b.m.material === MAT.rock) grey++; }
+      return { vault: landed, queue: grey + spawnLeft, backoff: amber, pit: deadTotal };
+    }
+    const nudge = (k, dir) => { const t = targets()[k]; if (dir > 0 ? shown[k] < t : shown[k] > t) shown[k] += dir; }; // one step, never past the target
+    function fly(pts, col, k, done) {
+      if (k) lastK[k] = uclock;
+      const s = live() && sparks.find((s) => !s.curve);
+      if (!s) return;
+      s.curve = new THREE.CatmullRomCurve3(pts, false, "centripetal");
+      s.dur = clamp(s.curve.getLength() / 9, 0.6, 2.6); s.t = 0; s.k = k; s.done = done;
+      if (k) inflight[k]++;
+      for (const m of [s.head, ...s.trail]) { m.material.color.copy(col).multiplyScalar(2.2); m.visible = true; }
+      sfx.zip(panOf(pts[0]));
+    }
+    function stopSparks() {
+      for (const s of sparks) if (s.curve) { s.curve = null; for (const m of [s.head, ...s.trail]) m.visible = false; }
+      Object.assign(inflight, per(0));
+    }
+    const mouth = (x) => V(x, surf(x) + 0.35, ZS);
+    const over = (a, b, h) => { const m = a.clone().lerp(b, 0.5); m.y = Math.max(a.y, b.y) + h; return m; };
+    const atRock = (b) => V(b.p.x, b.p.y + b.r * 0.6, b.p.z);
+
+    // The timeline, in seconds from the press. Each value eases from where it was to where it's going,
+    // so a second press mid-way turns it around smoothly.
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+    const win = (t, a, b) => ease(clamp((t - a) / (b - a), 0, 1));
+    function settle() {
+      const on = XR.on;
+      XR.from = null;
+      xs.cam = on ? 1 : 0; xs.zc = on ? ZO : 1000; xs.open.fill(on ? 1 : 0); xs.lit.fill(on ? 1 : 0);
+    }
+    function advance(dt) {
+      if (!XR.from) return;
+      const t0 = XR.t, t = (XR.t += dt), f = XR.from, hit = (a) => t0 < a && t >= a;
+      if (XR.on) {
+        xs.cam = f.cam + (1 - f.cam) * win(t, 0, 2.2);
+        xs.zc = f.zc + (ZO - f.zc) * win(t, 0.3, 1.5);
+        ROOMS.forEach((r, i) => {
+          const a = 1.5 + 0.12 * i;
+          xs.open[i] = f.open[i] + (1 - f.open[i]) * win(t, a, a + 0.5);
+          if (hit(a) && f.open[i] < 1) { const h = holes[i], cx = (h.x + h.z) / 2, cy = (h.y + Math.min(h.w, surf(cx))) / 2; sfx.crack(panOf(_cv.set(cx, cy, ZO))); puff(cx, cy - 0.3, ZO + 0.3, 3, 0.6, 0.8); }
+        });
+        lamps.forEach((l, j) => { const a = 2.4 + (0.6 * j) / (NL - 1); xs.lit[j] = f.lit[j] + (1 - f.lit[j]) * win(t, a, a + 0.15); });
+        if (hit(0.3)) sfx.grind(0);
+        if (t >= 3.2) settle();
+      } else {
+        xs.open.forEach((_, i) => { xs.open[i] = f.open[i] * (1 - win(t, 0, 0.5)); });
+        xs.lit.forEach((_, j) => { xs.lit[j] = f.lit[j] * (1 - win(t, 0, 0.3)); });
+        xs.zc = f.zc + (60 - f.zc) * win(t, 0.4, 1.2);
+        xs.cam = f.cam * (1 - win(t, 0, 1.4));
+        if (hit(0.4)) sfx.grind(0);
+        if (t >= 1.4) settle();
+      }
+      // Dust spills off the top of the cut as it sweeps through the hill.
+      const sweep = XR.on ? t > 0.3 && t < 1.5 : t > 0.4 && t < 1.2;
+      if (sweep && !reduce && Math.random() < dt * 40) { const x = (cam.userData.slx || 0) - 18 + Math.random() * 40; puff(x, ground(x, xs.zc), xs.zc + 0.2, 1, 1.5, 1.4); }
+    }
+    const _cv = V();
+
+    function step(dt) {
+      uclock += dt;
+      advance(dt);
+      cut.constant = xs.zc;
+      capMesh.visible = xs.zc < 100;
+      if (capMesh.visible && capZ !== xs.zc) shapeCap(xs.zc);
+      xs.open.forEach((o, i) => { capU.uO.value[i] = o; });
+      undr.visible = xs.open.some((o) => o > 0);
+      // Counts: sparks move them a step at a time; with none in flight for 1.5 s they catch up.
+      const tg = targets();
+      if (!live()) { stopSparks(); Object.assign(shown, tg); }
+      else for (const k of KEYS) {
+        if (inflight[k] || uclock - lastK[k] < 1.5 || shown[k] === tg[k]) { rec[k] = 0; continue; }
+        if ((rec[k] -= dt) > 0) continue;
+        rec[k] = 0.15;
+        const g = tg[k] - shown[k];
+        shown[k] += Math.sign(g) * Math.ceil(Math.abs(g) / 4);
+      }
+      for (const s of sparks) {
+        if (!s.curve) continue;
+        s.t += dt / s.dur;
+        const u = Math.min(1, s.t);
+        s.curve.getPointAt(u, s.head.position);
+        s.trail.forEach((m, i) => { s.curve.getPointAt(Math.max(0, u - (i + 1) * 0.025), m.position); m.material.opacity = 0.7 - i * 0.15; });
+        if (s.t >= 1) {
+          const { done, k } = s;
+          s.curve = null;
+          for (const m of [s.head, ...s.trail]) m.visible = false;
+          if (k) { inflight[k]--; lastK[k] = uclock; }
+          if (done) done();
+        }
+      }
+      if (!undr.visible) return;
+      for (const s of signs) {
+        s.m.material.opacity = xs.open[s.ri];
+        if (s.n === -1 || (s.key && s.n !== (shown[s.key] ?? 0))) drawSign(s, shown[s.key] ?? 0);
+      }
+      lamps.forEach((l, j) => {
+        const k = xs.lit[j] * (0.86 + 0.09 * Math.sin(uclock * 13 + j * 7) * Math.sin(uclock * 7.3 + j) + 0.05 * Math.sin(uclock * 31 + j * 3));
+        lampC.value[j].set(l.col.r, l.col.g, l.col.b).multiplyScalar(k * boost);
+        l.glass.material.color.copy(l.col).multiplyScalar(0.15 + 2.5 * k);
+        l.halo.material.opacity = 0.5 * k;
+      });
+      // Room contents follow the counts: written tablets, filled slots, glowing embers.
+      const nt = Math.min(shown.vault, 48), nb = Math.min(shown.queue, 32);
+      for (let i = 0; i < 48; i++) {
+        const f = (tabFlash[i] = Math.max(0, tabFlash[i] - dt * 1.2)), w = i < nt ? 1 : 0.4;
+        tablets.setColorAt(i, c4.setRGB(w, w * 0.97, w * 0.93).add(_ck.copy(COL.ok).multiplyScalar(f * 2.5)));
+      }
+      for (let i = 0; i < 32; i++) { const f = (ballFlash[i] = Math.max(0, ballFlash[i] - dt * 1.2)); balls.setColorAt(i, c4.setRGB(1, 1, 1).add(_ck.copy(COL.job).multiplyScalar(f * 2))); }
+      balls.count = nb;
+      embers.count = Math.min(shown.backoff, 16);
+      for (let i = 0; i < embers.count; i++) embers.setColorAt(i, c4.copy(COL.warn).multiplyScalar(1 + 0.5 * Math.sin(uclock * 2.5 + i * 1.7)));
+      pitEmbers.count = Math.min(shown.pit, 24);
+      for (let i = 0; i < pitEmbers.count; i++) pitEmbers.setColorAt(i, c4.copy(COL.bad).multiplyScalar(0.8 + 0.4 * Math.sin(uclock * 1.3 + i * 2.1)));
+      for (const m of [tablets, balls, embers, pitEmbers]) m.instanceColor.needsUpdate = true;
+    }
+    const _ck = new THREE.Color();
+    const label0 = canvas.getAttribute("aria-label");
+    const CUT_LABEL = "The hill cut open. Under the slab is the Postgres vault, where each job is written. A relay tunnel carries it to the Redis cistern, where it waits until a worker takes it up a lift. Retries wait out their backoff in a side pocket; jobs out of retries drop into the dead-letter pit; deliveries run from the flag down a conduit to your server.";
+
+    return {
+      step,
+      openness: () => xs.open.reduce((a, b) => a + b, 0) / ROOMS.length,
+      toggle() {
+        XR.on = !XR.on; XR.t = 0;
+        XR.from = { cam: xs.cam, zc: Math.min(xs.zc, 60), open: xs.open.slice(), lit: xs.lit.slice() };
+        host.classList.toggle("xr", XR.on);
+        canvas.setAttribute("aria-label", XR.on ? CUT_LABEL : label0);
+        if (reduce) { advance(1e3); step(0); render(); }
+        return XR.on;
+      },
+      theme(dark, accent) { amb.value = dark ? 0.8 : 0.4; boost = dark ? 22 : 8; COL.ok.copy(accent); },
+      debug: () => ({ xr: +xs.cam.toFixed(3), zc: xs.zc, open: xs.open.map((o) => +o.toFixed(3)), shown: { ...shown }, target: targets(), sparks: sparks.filter((s) => s.curve).length }),
+      // Events from the surface. Each sends a spark along its path; arrivals step the counts.
+      land(b) {
+        if (!live()) return;
+        const n = (shown.vault + inflight.vault) % 48, P = tabletAt(n), s = atRock(b), m = mouth(-8.6);
+        fly([s, over(s, m, 2.5), m, V(-8.6, -1.4, ZS), V(-8.6, -2.6, ZS - 0.3), V(P.x, P.y + 0.25, ZS - 1.2), P], COL.job, "vault", () => {
+          nudge("vault", 1); tabFlash[n] = 1; sfx.clink(panOf(P));
+          const j = Math.min(shown.queue + inflight.queue, 31), Q = slotAt(j);
+          fly([P, V(P.x, P.y, ZS - 1.5), V(-7.0, -4.2, ZS - 0.4), V(-6.3, -4.2, ZS), V(-3.7, -4.2, ZS), V(Q.x, Q.y + 0.2, ZS - 1.0), Q], COL.job, "queue", () => { nudge("queue", 1); ballFlash[j] = 1; sfx.clink(panOf(Q)); });
+        });
+      },
+      go(b) { // after the claim, so the count can step down to the new target
+        if (!live()) return;
+        const e = atRock(b);
+        if (b.m.material === MAT.warn) {
+          const P = emberAt(Math.max(0, Math.min(shown.backoff, 16) - 1)), m = mouth(6.6);
+          nudge("backoff", -1); lastK.backoff = uclock;
+          fly([P, V(P.x, -3.4, ZS - 0.2), V(6.6, -2.8, ZS), m, over(m, e, 2.5), e], COL.warn, null);
+        } else {
+          const P = slotAt(Math.max(0, Math.min(shown.queue, 32) - 1)), m = mouth(-0.2);
+          nudge("queue", -1); lastK.queue = uclock;
+          fly([P, V(P.x, P.y + 0.2, ZS - 1.0), V(-0.2, -3.0, ZS), m, over(m, e, 2), e], COL.job, null);
+        }
+      },
+      slip(b) {
+        if (!live()) return;
+        const s = atRock(b), m = mouth(6.6), P = emberAt(Math.min(shown.backoff + inflight.backoff, 15));
+        fly([s, over(s, m, 2), m, V(6.6, -2.8, ZS), V(P.x, -3.6, ZS - 0.2), P], COL.warn, "backoff", () => { nudge("backoff", 1); sfx.clink(panOf(P)); });
+      },
+      dead(b) {
+        if (!live()) return;
+        const s = atRock(b), m = mouth(6.6), P = PIT[Math.min(shown.pit + inflight.pit, 23)];
+        fly([s, over(s, m, 2), m, V(6.6, -2.8, ZS), V(7.7, -3.6, ZS), V(7.7, -4.6, ZS), V(7.7, -6.3, ZS), V(P.x, P.y + 0.6, ZS - 0.4), P], COL.bad, "pit", () => { nudge("pit", 1); sfx.clink(panOf(P)); });
+      },
+      deliver() {
+        if (!live()) return;
+        const f = V(FLAG_X + 1, H + 3.5, 0), m = mouth(15);
+        fly([f, over(f, m, 1), m, V(15, -0.9, ZS), V(16.2, -1.0, ZS), V(34, -1.0, ZS)], COL.ok, null);
+      },
+    };
+  })();
+
   function render() { place(); gl.render(scene, cam); labels(); }
 
   // ---- Theme: daylight for light mode, dusk for dark mode. Tints come from the page's tokens.
@@ -948,6 +1361,7 @@ async function start() {
       m.emissive.copy(c);
       m.emissiveIntensity = dark ? 0.22 : 0.1;
     }
+    under.theme(dark, tok("accent"));
   }
 
   let last = performance.now(), hudT = 0, tier = 0;
@@ -988,9 +1402,10 @@ async function start() {
         const sp = Math.hypot(b.v.x, b.v.z) * (b.held ? 0.5 : 1);
         if (sp > 0.05) { roll += sp; pan += sp * panOf(b.p); }
       }
-      sfx.update(raw, roll, roll ? pan / roll : 0);
+      sfx.update(raw, roll, roll ? pan / roll : 0, under.openness());
     }
     for (const w of workers) animate(w, raw);
+    under.step(raw);
     const fl = flag.userData.pulse || 0, fp = flagGeo.attributes.position;
     for (let i = 0; i < fp.count; i++) { const x = flagX[i]; fp.setZ(i, (Math.sin(x * 3.2 - clock * 6) * 0.6 + Math.sin(x * 5.1 - clock * 9.3) * 0.25) * (0.16 + fl * 0.2) * (x / 2)); }
     fp.needsUpdate = true; flagGeo.computeVertexNormals();
@@ -1021,7 +1436,17 @@ async function start() {
       snd.lastChild.textContent = on ? "Sound on" : "Sound off";
     });
   }
+  const xb = $("xray");
+  if (xb) {
+    xb.hidden = false;
+    xb.addEventListener("click", () => {
+      const on = under.toggle();
+      xb.setAttribute("aria-pressed", String(on));
+      xb.lastChild.textContent = on ? "Close the hill" : "See inside";
+    });
+  }
   window.relayqHill = { ingest };
+  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = under.debug;
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
     for (let i = 0; i < 6; i++) { drop(); for (let k = 0; k < 40; k++) { for (const b of stones) physics(b, 0.025); collide(); } }
