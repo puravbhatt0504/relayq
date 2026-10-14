@@ -309,6 +309,41 @@ A run takes the whole window so the hill has room, and waiting boulders stand in
 - C1 still holds in full view: "See inside" gives `zc === 12.5` with every room open.
 - `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
 
+## Phase 17 — Demo hill: guided tour on Run
+
+When a run starts in full view, the camera follows one job's path with a caption at each stop, then hands back to the wide view. The onboarding is the animation itself.
+
+**Files:** `public/demo/assets/hill.js` (`TOUR`, `tour`, `tourStart`/`tourStop`/`tourStep`, `place()` uses `tour.pos`/`tour.look` while `tour.k`), `src/api/demo.ts` (`.tour` card CSS, `.scene.touring .tag.on`, `hill.js?v=18`).
+
+**Stops** (look at `at` from `dist` m, swung `yaw`, raised `pitch * dist`; the pill `tag` lights up, the others dim to 0.3):
+
+| # | title | at | dist | yaw | pitch | waits for |
+|---|---|---|---|---|---|---|
+| 1 | Jobs drop in | slab + (1, 2, 1) | 24 | −0.35 | 0.4 | |
+| 2 | They wait in line | (−6, ground + 0.5, 3.5) | 26 | −0.1 | 0.6 | |
+| 3 | A worker takes the front one | (1.5, ground + 1, 3) | 25 | −0.25 | 0.45 | a worker holding a boulder |
+| 4 | Some slip | (6.5, ground + 1, 0) | 25 | 0.12 | 0.36 | `slipped` above its value at the start |
+| 5 | Delivered | (FLAG_X − 1.5, ground + 1.8, 0) | 16 | −0.3 | 0.3 | `delivered` above its value at the start |
+
+**Timing.**
+- Each stop holds `HOLD = 4.6` s.
+- A stop with a wait holds until 2.5 s after its event, but never past 2.5 × HOLD, because the hill only moves when the real queue does.
+- Camera moves are two cascaded damped steps (rate 2.4/s), so each move eases in and out.
+- After stop 5, the camera eases back to the full-view pose and `tour.k` drops to 0 after 3 s.
+
+**Ending it early:** Skip tour, Esc (leaves full view), dragging the canvas, or See inside all stop the tour and hand the camera back.
+
+**No tour when:** reduced motion is on, the window doesn't stage (narrow or portrait), or the hill is already open.
+
+**Done** (Playwright 1440×900, fresh context, `?debug`):
+- T1: 1.5 s after Run, `debug().tour` is `{i:0,k:1}`, `.tour` is visible and `#scene.touring` is set.
+- T2: the stops advance 0→1→2→3→4→−1, then `k === 0`. Stops 1 and 2 last 4.6 s ± 0.5. No stop lasts more than 11.5 s ± 0.5.
+- T3: Skip tour gives `i === -1` and the card hidden at once, and `k === 0` 3.2 s later.
+- T4: Esc during the tour gives `stage` false, `i === -1` and `k === 0` 3.5 s later.
+- T5: with reduced motion, Run gives `stage` true and `i === -1, k === 0`.
+- Screenshots of all five stops reviewed.
+- `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
+
 ---
 
 ## Out of scope
@@ -332,3 +367,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] `POST /embed` (sync embeddings for interactive use: PulseBoard search query and duplicate check; bulk stays on `embed.batch`). `test/embed-api.test.ts` 3 pass.
 - [x] Phase 15 Demo hill: "See inside" cutaway. Playwright 1440x900: C1 open state exact at 3.3 s, C2 vault 20 at 11.6 s and counts equal targets 5 ms after settle, C3 closed with pills back, C4 71 fps with 13 sparks, C5 reduced motion instant; light, dark and 390x844 reviewed.
 - [x] Phase 16 Demo hill: full view and orderly queue. F1 stage/exit/focus exact, F2 420x860 not staged, F3 7/7 in slot with min gap 2.4 m at 14 s, F4 reduced motion instant, C1 in full view; lint, tsc, demo tests pass.
+- [x] Phase 17 Demo hill: guided tour on Run. T1 start state exact, T2 stops at 4.8/9.5/20.9/32.4 s then done at 42.5 s (stops 3 and 4 hit their cap: the local worker was clearing a test backlog), T3 skip, T4 Esc, T5 reduced motion; lint, tsc, demo tests pass.

@@ -893,6 +893,68 @@ async function start() {
   const look = V(5.5, 2.6, 0);
   let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null, clock = 0, shake = 0;
   const full = { k: 0, on: false, from: 0, t: 1 }; // full view, eased over 1.2 s
+  // ---- Tour: when a run starts in full view, the camera follows one job's path, a caption at each
+  // stop, then hands back to the wide view. Each shot looks at `at` from `dist` metres, swung `yaw`
+  // and raised `pitch * dist`, like place() does. `tag` is the pill to light up.
+  const HOLD = 4.6;
+  const TOUR = [
+    { at: [SLAB.x + 1, SLAB_TOP + 2, 1], dist: 24, yaw: -0.35, pitch: 0.4, tag: 0, title: "Jobs drop in",
+      text: "Each job you POST lands on the slab as a boulder. The API writes it to Postgres before it answers, so a crash can't lose it." },
+    { at: [-6, profile(-6) + 0.5, 3.5], dist: 26, yaw: -0.1, pitch: 0.6, tag: 2, title: "They wait in line",
+      text: "A relay hands each saved job to Redis, and the boulders line up oldest first. Amber ones failed before and are waiting out a backoff." },
+    { at: [1.5, profile(1.5) + 1, 3], dist: 25, yaw: -0.25, pitch: 0.45, tag: 3, wait: () => workers.some((w) => w.b), title: "A worker takes the front one",
+      text: "A free worker picks up the boulder at the head of the line and starts pushing. Each push is a real HTTP call, happening now." },
+    { at: [6.5, profile(6.5) + 1, 0], dist: 25, yaw: 0.12, pitch: 0.36, tag: -1, wait: () => slipped > tour.s0, title: "Some slip",
+      text: "One in five fails on its first try. The boulder rolls back and gets pushed again after a backoff. Out of tries, it goes to the dead letters." },
+    { at: [FLAG_X - 1.5, profile(FLAG_X) + 1.8, 0], dist: 16, yaw: -0.3, pitch: 0.3, tag: 4, wait: () => delivered > tour.d0, title: "Delivered",
+      text: "Over the top, the job reaches your webhook and the flag waves. The card at the bottom left counts them in." },
+  ];
+  // A shot with `wait` holds past HOLD until that happens on the hill (then 2.5 s more, to see it),
+  // or for at most 2.5 * HOLD: the hill only moves when the real queue does.
+  // i: the shot (-1 while handing back), k: 1 while the tour owns the camera. pos/look chase the
+  // shot through mid/lmid, two damped steps, so each move eases in and out. np/nl: the usual pose.
+  const tour = { i: -1, t: 0, k: 0, end: 0, seen: -1, s0: 0, d0: 0, pos: V(), mid: V(), look: V(), lmid: V(), np: V(), nl: V() };
+  const cap = document.createElement("div");
+  cap.className = "tour"; cap.hidden = true; cap.setAttribute("aria-live", "polite");
+  cap.innerHTML = '<div class="tour-head"><span></span><button type="button">Skip tour</button></div><h3></h3><p></p><div class="tour-bar"><i></i></div>';
+  host.appendChild(cap);
+  const [capN, capT, capP, capBar] = ["span", "h3", "p", ".tour-bar i"].map((s) => cap.querySelector(s));
+  function tourShow() {
+    const s = TOUR[tour.i];
+    capN.textContent = `${tour.i + 1} of ${TOUR.length}`; capT.textContent = s.title; capP.textContent = s.text;
+    cap.classList.remove("step"); void cap.offsetWidth; cap.classList.add("step"); // replay the fade-in
+    tags.forEach((t, j) => t.el.classList.toggle("on", j === s.tag));
+  }
+  function tourStart() {
+    tour.i = 0; tour.t = 0; tour.k = 1; tour.seen = -1; tour.s0 = slipped; tour.d0 = delivered;
+    tour.pos.copy(cam.position); tour.mid.copy(cam.position); tour.look.copy(tour.nl); tour.lmid.copy(tour.nl);
+    cap.hidden = false; host.classList.add("touring"); tourShow();
+  }
+  function tourStop() { // hand the camera back; it eases to the usual pose over the next few seconds
+    if (tour.i < 0) return;
+    tour.i = -1; tour.end = 0; cap.hidden = true; host.classList.remove("touring");
+  }
+  cap.querySelector("button").addEventListener("click", tourStop);
+  const _tp = V(), _tl = V();
+  function tourStep(dt) {
+    if (!tour.k) return;
+    if (tour.i >= 0) {
+      tour.t += dt;
+      capBar.style.transform = `scaleX(${Math.min(1, tour.t / HOLD).toFixed(3)})`;
+      const w = TOUR[tour.i].wait;
+      if (w && tour.seen < 0 && w()) tour.seen = tour.t;
+      if (tour.t > HOLD && (!w || (tour.seen >= 0 && tour.t > tour.seen + 2.5) || tour.t > HOLD * 2.5)) {
+        tour.t = 0; tour.seen = -1;
+        if (++tour.i === TOUR.length) tourStop(); else tourShow();
+      }
+    } else if ((tour.end += dt) > 3) tour.k = 0;
+    if (tour.i >= 0) {
+      const s = TOUR[tour.i];
+      _tl.fromArray(s.at); _tp.set(_tl.x + Math.sin(s.yaw) * s.dist, _tl.y + s.dist * s.pitch, _tl.z + Math.cos(s.yaw) * s.dist);
+    } else { _tp.copy(tour.np); _tl.copy(tour.nl); }
+    const r = 1 - Math.exp(-dt * 2.4);
+    tour.mid.lerp(_tp, r); tour.pos.lerp(tour.mid, r); tour.lmid.lerp(_tl, r); tour.look.lerp(tour.lmid, r);
+  }
   function frameFor(fill) {
     const wide = host.clientWidth > 900, shifted = wide && !fill, tanH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
     // Side-on, for the cutaway: fit x -13.5..16.5 on the cut face into the part of the frame the
@@ -923,8 +985,10 @@ async function start() {
     const k = xs.cam, mix = (a, b) => a + (b - a) * k;
     const a = mix(F("yaw0"), 0) + (yaw + sway * 0.05) * (1 - 0.5 * k), dist = mix(F("dist"), F("sdist")), pitch = mix(F("pitch"), 0.05), lx = mix(F("lx"), F("slx")), ly = mix(look.y, -3.2);
     const hand = reduce ? 0 : 1; // a slow, small drift, as if the camera were held
-    cam.position.set(lx + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, ly + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
-    cam.lookAt(lx + Math.sin(clock * 0.19) * 0.06 * hand, ly, look.z);
+    tour.np.set(lx + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, ly + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
+    tour.nl.set(lx + Math.sin(clock * 0.19) * 0.06 * hand, ly, look.z);
+    cam.position.copy(tour.k ? tour.pos : tour.np);
+    cam.lookAt(tour.k ? tour.look : tour.nl);
   }
   host.addEventListener("pointermove", (e) => {
     const r = host.getBoundingClientRect();
@@ -932,7 +996,7 @@ async function start() {
     if (drag) yawT = clamp(drag.y0 + (e.clientX - drag.x) / 320, -0.6, 0.6);
   });
   host.addEventListener("pointerleave", () => { swayT = 0; drag = null; });
-  host.addEventListener("pointerdown", (e) => { if (e.target === canvas) { drag = { x: e.clientX, y0: yawT }; canvas.style.cursor = "grabbing"; } });
+  host.addEventListener("pointerdown", (e) => { if (e.target === canvas) { tourStop(); drag = { x: e.clientX, y0: yawT }; canvas.style.cursor = "grabbing"; } });
   addEventListener("pointerup", () => { drag = null; canvas.style.cursor = ""; });
 
   let visible = true;
@@ -1427,6 +1491,7 @@ async function start() {
     }
     clock += raw;
     if (full.t < 1) { full.t = Math.min(1, full.t + raw / 1.2); const e = full.t < 0.5 ? 4 * full.t ** 3 : 1 - (-2 * full.t + 2) ** 3 / 2; full.k = full.from + ((full.on ? 1 : 0) - full.from) * e; }
+    tourStep(raw);
     shake *= Math.exp(-raw * 6);
     grass.uTime.value = clock;
     if (sfx.on) { // rolling rock: louder the more of it is moving, panned toward where it is
@@ -1474,6 +1539,7 @@ async function start() {
   if (xb) {
     xb.hidden = false;
     xb.addEventListener("click", () => {
+      tourStop();
       const on = under.toggle();
       xb.setAttribute("aria-pressed", String(on));
       xb.lastChild.textContent = on ? "Close the hill" : "See inside";
@@ -1484,9 +1550,11 @@ async function start() {
     if (on === full.on) return;
     full.on = on; full.from = full.k; full.t = reduce ? 1 : 0;
     if (reduce) { full.k = on ? 1 : 0; render(); }
+    else if (on && !under.openness()) tourStart(); // reduced motion, or the hill already open: no tour
+    else tourStop();
   }
   window.relayqHill = { ingest, stage };
-  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
+  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), tour: { i: tour.i, k: tour.k }, q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
     for (let i = 0; i < 6; i++) { drop(); for (let k = 0; k < 40; k++) { for (const b of stones) physics(b, 0.025); collide(); } }

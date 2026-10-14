@@ -166,6 +166,19 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .tag small{display:block;margin-top:3px;font:10px/1 var(--mono);color:var(--fg-3)}
 .leads{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;filter:drop-shadow(0 1px 1px rgba(0,0,0,.45));transition:opacity .3s}
 .scene.xr .tag,.scene.xr .leads{opacity:0!important}
+/* Tour: a run in full view walks the camera along one job's path, with a caption card at each stop. */
+.tour{position:absolute;left:24px;top:24px;z-index:3;width:340px;max-width:calc(100% - 48px);padding:14px 16px 0;overflow:hidden;
+  background:color-mix(in srgb,var(--surface) 92%,transparent);border:1px solid var(--line);border-radius:8px;backdrop-filter:blur(6px);box-shadow:0 8px 24px rgba(10,20,10,.25)}
+.tour[hidden]{display:none}
+.tour-head{display:flex;justify-content:space-between;align-items:center;font:500 11.5px/1 var(--mono);color:var(--fg-3)}
+.tour-head button{font:inherit;color:var(--fg-2);background:none;border:0;padding:4px 0;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.tour h3{margin:10px 0 0;font:600 18px/1.25 var(--font);letter-spacing:-.01em;color:var(--fg)}
+.tour p{margin:6px 0 14px;font-size:14px;line-height:1.5;color:var(--fg-2)}
+.tour-bar{height:2px;margin:0 -16px;background:var(--line)}
+.tour-bar i{display:block;height:100%;background:var(--accent);transform-origin:0 0;transform:scaleX(0)}
+.tour.step h3,.tour.step p{animation:tour-in .5s var(--ease) both}
+@keyframes tour-in{from{opacity:0;transform:translateY(6px)}}
+.scene.touring .tag{opacity:.3}.scene.touring .tag.on{opacity:1;color:var(--fg);border-color:var(--accent)}
 .leads line{stroke:#fff;stroke-opacity:.9;stroke-width:1.25}.leads line.dash{stroke-dasharray:3 4}
 .leads circle,.leads ellipse{fill:#fff;stroke:rgba(0,0,0,.35);stroke-width:1}
 .hud{position:absolute;right:24px;bottom:24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;font:12px var(--mono);color:var(--fg-3);
@@ -546,5 +559,5 @@ footer nav{gap:24px}
 })();
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=16"></script>
+<script type="module" src="/demo/assets/hill.js?v=18"></script>
 </body></html>`;
