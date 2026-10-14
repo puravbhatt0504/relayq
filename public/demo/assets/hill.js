@@ -7,7 +7,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
-import { createSound } from "./sound.js?v=1";
+import { createSound } from "./sound.js?v=2";
 
 const $ = (id) => document.getElementById(id);
 const host = $("scene"), canvas = $("gl"), hint = $("hint");
@@ -464,7 +464,6 @@ async function start() {
   // steps shorten to STRIDE of a walking step.
   const TILT = 0.2, DROP = 0.06, STRIDE = 0.6;
   const shoulderAt = (lean) => [Math.sin(lean * TILT) * (HIP - DROP) + Math.sin(lean) * (SH - HIP), Math.cos(lean * TILT) * (HIP - DROP) + Math.cos(lean) * (SH - HIP)];
-  const ARM = clamp(bonePos("LeftArm").distanceTo(bonePos("LeftForeArm")) + bonePos("LeftForeArm").distanceTo(bonePos("LeftHand")), 0.4, 0.8);
   const faceTo = (dx, dz) => Math.atan2(-dx, -dz); // the Soldier faces -z
   const steepness = (x, z, d) => { const [gx, gz] = grad(x, z); return Math.atan(gx * d.x + gz * d.z); };
 
@@ -477,7 +476,7 @@ async function start() {
     const home = V(-3.4 + i * 1.15 + Math.random() * 0.3, 0, 10.2 + (i % 2) * 1.3 + Math.random() * 0.4);
     const w = {
       model, mixer, acts, lane, home, x: home.x, z: home.z, face: faceTo(-4 - home.x, -home.z) + (Math.random() - 0.5) * 0.8,
-      spd: 0, lean: 0, leanT: 0, poseW: 0, poseT: 0, scrabble: false, state: "idle", t: 0, b: null, ev: null, d: V(1, 0, 0), up: false,
+      spd: 0, surge: 1, lean: 0, leanT: 0, poseW: 0, poseT: 0, scrabble: false, state: "idle", t: 0, b: null, ev: null, d: V(1, 0, 0), up: false,
       pb: V(), pr: R, feet: [{ up: false, p: V() }, { up: false, p: V() }],
       bones: {
         neck: bone("Neck"), hips: bone("Hips"), spine: ["Spine", "Spine1", "Spine2"].map(bone),
@@ -511,10 +510,10 @@ async function start() {
     _dn.set(-gx, 1, -gz).normalize();
     return o.copy(p).addScaledVector(_ds, -r * 0.86).addScaledVector(_dn, -r * 0.28);
   }
-  // Where to stand so the shoulders are a slightly bent arm's length from that contact, leaning `lean`.
+  // Where to stand so the near shoulder is against that contact, leaning `lean`.
   const _f = V();
   function stance(b, d, lean) {
-    const c = contact(_ct, b.p, b.r, d), [sl, cl] = shoulderAt(lean), goal = ARM * 0.85;
+    const c = contact(_ct, b.p, b.r, d), [sl, cl] = shoulderAt(lean), goal = 0.3;
     let lo = b.r * 0.9 + sl, hi = 4;
     for (let k = 0; k < 14; k++) {
       const s = (lo + hi) / 2, fx = b.p.x - d.x * s, fz = b.p.z - d.z * s, fy = ground(fx, fz);
@@ -523,7 +522,7 @@ async function start() {
     const s = (lo + hi) / 2;
     return _f.set(b.p.x - d.x * s, 0, b.p.z - d.z * s);
   }
-  const leanFor = (b, d) => 0.85 + 0.35 * Math.max(0, steepness(b.p.x, b.p.z, d));
+  const leanFor = (b, d) => 1.0 + 0.3 * Math.max(0, steepness(b.p.x, b.p.z, d)); // von Stuck: nearly flat, driving from the legs
 
   let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null;
   const _d = V();
@@ -554,7 +553,7 @@ async function start() {
         const steep = clamp(steepness(b.p.x, b.p.z, d) / 0.7, 0, 1);
         speed = 0.95 * (1 + Math.min(pending.length, 20) / 30) * (1 - 0.45 * steep);
         if (w.up && b.p.x >= w.goal) {
-          if (w.ev === "ok") { b.held = false; b.out = true; b.air = false; b.v.set(2.6, 0, 0); w.state = "rest"; w.t = 1.4; w.b = null; }
+          if (w.ev === "ok") { b.held = false; b.out = true; b.air = false; b.v.set(2.6, 0, 0); w.state = "rest"; w.t = 2.2; w.b = null; w.watch = b; }
           else { w.state = "strain"; w.t = 0.9; }
         }
         if (w.ev === "ok" && !b.flagged && b.p.x >= FLAG_X) { b.flagged = true; b.m.material = MAT.accent; flag.userData.pulse = 1; delivered++; sfx.chime(panOf(b.p)); }
@@ -571,7 +570,10 @@ async function start() {
       }
       if (w.b) {
         w.spd += (Math.abs(speed) - w.spd) * Math.min(1, dt * 6);
-        carry(b, d, w.state === "strain" ? speed : w.spd, dt);
+        // Jankovics: the rock goes up in heaves, one per step, not at a steady glide.
+        const ph = ((w.acts.Walk.time / w.acts.Walk.getClip().duration) * 2) % 1;
+        w.surge = w.state === "push" ? 0.35 + 1.3 * Math.sin(Math.PI * ph) ** 2 : 1;
+        carry(b, d, w.state === "strain" ? speed : w.spd * w.surge, dt);
         w.pb.copy(b.p); w.pr = b.r;
         const f = stance(b, d, w.lean);
         if (w.state === "brace") { w.x += (f.x - w.x) * Math.min(1, dt * 8); w.z += (f.z - w.z) * Math.min(1, dt * 8); }
@@ -581,12 +583,12 @@ async function start() {
     } else if (w.state === "dodge") { // jump clear of the rolling rock
       w.t -= dt;
       walkTo(w, w.x, w.z + w.side * 3, RUN * 0.9, dt);
-      if (w.t <= 0) { w.state = "watch"; w.t = 1; }
+      if (w.t <= 0) { w.state = "watch"; w.t = 2; } // Camus: the pause, watching it roll all the way down
     } else if (w.state === "watch" || w.state === "rest") {
       w.t -= dt;
       w.spd = Math.max(0, w.spd - dt * 4);
       const o = w.watch && !w.watch.gone ? w.watch.p : V(X2 + 4, 0, w.lane);
-      if (w.state === "watch") w.face = faceTo(o.x - w.x, o.z - w.z);
+      w.face = faceTo(o.x - w.x, o.z - w.z);
       if (w.t <= 0) { w.state = "return"; w.watch = null; }
     }
   }
@@ -631,7 +633,7 @@ async function start() {
     const stride = 1 - (1 - STRIDE) * k; // pushing takes short, quick steps that still match the ground speed
     const weights = w.scrabble ? { Idle: 0, Walk: 1, Run: 0 } : { Idle: idle, Walk: (1 - idle) * (1 - run), Run: (1 - idle) * run };
     for (const n in weights) w.acts[n].setEffectiveWeight(weights[n]);
-    w.acts.Walk.timeScale = w.scrabble ? 1.5 : clamp(s / (WALK * stride), 0.35, 2);
+    w.acts.Walk.timeScale = w.scrabble ? 1.5 : clamp((s * (k > 0.5 ? w.surge : 1)) / (WALK * stride), 0.2, 2.4); // planted feet keep pace with each heave
     w.acts.Run.timeScale = clamp(s / RUN, 0.6, 1.4);
     w.mixer.update(dt);
     const base = ground(w.x, w.z);
@@ -673,14 +675,16 @@ async function start() {
     // The back takes the rest of the lean; the head comes up to look up the hill, not at the dirt.
     for (const sp of B.spine) turnWorld(sp, _r, (-bend * 0.55) / B.spine.length);
     if (w.scrabble) turnWorld(B.spine[2], _r, Math.sin(clock * 41) * 0.03); // straining: the back trembles
-    turnWorld(B.neck, _r, w.lean * 0.7);
+    turnWorld(B.neck, _r, w.lean * 0.45); // head tucked low beside the rock, turned a little to the side
+    turnWorld(B.neck, UP, 0.45 * k);
     B.neck.getWorldPosition(_nk);
     // Hands on the rock. After a release they stay reaching for where it was while the pose eases off.
     const d = w.d;
     for (const arm of B.arms) {
       arm[0].getWorldPosition(_sh);
       const side = Math.sign(_sh.sub(_nk).dot(_r)) || 1;
-      contact(_goal, w.pb, w.pr, d).addScaledVector(_r, side * 0.26);
+      // Forearms up on the stone either side of the head, hands flat on its surface.
+      contact(_goal, w.pb, w.pr, d).addScaledVector(UP, 0.32).addScaledVector(_r, side * 0.34).sub(w.pb).setLength(w.pr * 0.97).add(w.pb);
       _pole.copy(UP).multiplyScalar(-1).addScaledVector(_r, side * 0.7).addScaledVector(d, -0.3);
       reach(arm, _goal, _pole, k);
     }
@@ -690,6 +694,7 @@ async function start() {
     const dig = w.poseW > 0.5 || w.scrabble;
     if (w.spd < 0.3 && !w.scrabble) return;
     sfx.step(panOf(p), clamp(w.spd / RUN, 0.3, 1) + (dig ? 0.5 : 0));
+    if (dig) sfx.heave(panOf(p), w.scrabble); // breath on every drive, a grunt now and then
     if (w.spd > WALK * 1.3 || dig) puff(p.x, ground(p.x, p.z), p.z, 1, 0.15, 0.3);
   }
 
@@ -705,7 +710,7 @@ async function start() {
         return;
       }
       b.claimed = true; w.b = b; w.ev = pending.shift(); w.state = "go"; w.up = false;
-      w.goal = w.ev === "ok" ? X2 - 0.3 : X0 + 2.5 + Math.random() * (X1 - X0) * 0.55;
+      w.goal = w.ev === "ok" ? X2 - 0.3 : X1 - 3.6 + Math.random() * 2.8; // as in the myth, it gets away near the top
     }
   }
   const deadQueue = [];

@@ -4,7 +4,7 @@
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 export function createSound() {
-  let ctx = null, out = null, noise = null, on = false, paused = false, wind = null, rumble = null, gravel = null, clock = 0;
+  let ctx = null, out = null, noise = null, on = false, paused = false, wind = null, rumble = null, gravel = null, clock = 0, voice = 0;
   const budget = { t: 0, n: 0 }; // one-shots per 100 ms, so a hundred landings don't turn into one roar
 
   function buffer(fill) {
@@ -116,6 +116,28 @@ export function createSound() {
       shot(pan, 0.06 * vol, (t, d) => {
         burst(t, d, "bandpass", 1600 + Math.random() * 1400, 1.1, 0.004, 0.06 + Math.random() * 0.03, 1);
         burst(t, d, "lowpass", 260, 0.7, 0.003, 0.05, 0.5);
+      });
+    },
+    // Effort, after Jankovics, who recorded his own breathing pushing against a wall: an exhale on
+    // each drive, and sometimes a short voiced grunt. One voice at a time, so it never becomes a choir.
+    heave(pan, hard) {
+      if (!on || paused || ctx.currentTime - voice < 0.35) return;
+      voice = ctx.currentTime;
+      shot(pan, hard ? 0.5 : 0.3, (t, d) => {
+        burst(t, d, "bandpass", 1100 + Math.random() * 300, 0.9, 0.03, 0.22, 0.5);
+        burst(t, d, "bandpass", 2700, 1.6, 0.03, 0.15, 0.15);
+        if (!hard && Math.random() > 0.3) return;
+        const o = ctx.createOscillator(), g = ctx.createGain(), f0 = 105 + Math.random() * 25;
+        o.type = "sawtooth";
+        o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 0.78, t + 0.25);
+        env(g.gain, t, 0.025, 0.4, hard ? 0.3 : 0.18);
+        for (const [fq, q, a] of [[600, 5, 1], [1000, 6, 0.5], [2400, 8, 0.15]]) { // formants of a closed "uh"
+          const f = ctx.createBiquadFilter(), fg = ctx.createGain();
+          f.type = "bandpass"; f.frequency.value = fq; f.Q.value = q; fg.gain.value = a;
+          g.connect(f).connect(fg).connect(d);
+        }
+        o.connect(g);
+        o.start(t); o.stop(t + 0.4);
       });
     },
     // A rock getting away: grinding as it starts to roll back.
