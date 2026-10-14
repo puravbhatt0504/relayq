@@ -304,6 +304,10 @@ footer nav{gap:24px}
   .scene{position:relative;grid-column:1 / -1;height:460px}
   .scrim{background:linear-gradient(180deg,var(--bg),transparent 14%,transparent 86%,var(--bg))}
   .hud{right:auto;left:16px}.hint{bottom:70px}
+  body:not(.stage) .scene.touring{height:600px}
+  body:not(.stage) .tour{left:16px;right:16px;top:auto;bottom:16px;width:auto;max-width:none;padding:10px 12px 0}
+  body:not(.stage) .tour h3{margin-top:6px;font-size:15px}body:not(.stage) .tour p{margin:4px 0 10px;font-size:12.5px;line-height:1.45}body:not(.stage) .tour-bar{margin:0 -12px}
+  .hud{transition:opacity .3s}.scene.touring .hud{opacity:0;pointer-events:none}
   .flow{grid-template-columns:repeat(2,minmax(0,1fr))}.flow::after{display:none}
   .bento{grid-template-columns:1fr 1fr}.tile.hero-t{grid-row:auto;grid-column:span 2}.tile.wide{grid-column:span 2}
   .split{grid-template-columns:1fr}.split>div+div{border-left:0;border-top:1px solid var(--line)}
@@ -311,7 +315,7 @@ footer nav{gap:24px}
 @media (max-width:640px){
   .wrap{padding:0 16px}nav.top{display:none}
   section{padding:64px 0}
-  .scene{height:400px}.hint{display:none}.ctl{top:12px;right:16px}.hud{left:16px;right:16px;gap:12px}
+  .scene{height:400px}body:not(.stage) .scene.touring{height:540px}.hint{display:none}.ctl{top:12px;right:16px}.hud{left:16px;right:16px;gap:12px}
   .tag{font-size:10px;padding:4px 5px}.tag small{font-size:9px}
   .flow,.types{grid-template-columns:1fr;gap:28px}
   .bento{grid-template-columns:1fr}.tile.hero-t,.tile.wide{grid-column:auto}.tile.wide{flex-direction:column;align-items:flex-start}
@@ -538,7 +542,11 @@ footer nav{gap:24px}
   function inset(r){return "inset("+r.top+"px "+(innerWidth-r.right)+"px "+(innerHeight-r.bottom)+"px "+r.left+"px)"}
   function stage(on){
     var staged=document.body.classList.contains("stage");
-    if(on===staged||(on&&!roomy.matches))return;
+    if(on&&!roomy.matches){ /* too narrow for full view: tour the hill where it sits */
+      if(!still.matches&&window.relayqHill&&window.relayqHill.tour){window.relayqHill.tour();scene.scrollIntoView({behavior:"smooth",block:"center"})}
+      return;
+    }
+    if(on===staged)return;
     if(window.relayqHill&&window.relayqHill.stage)window.relayqHill.stage(on);
     if(on){
       from=scene.getBoundingClientRect();
@@ -559,5 +567,5 @@ footer nav{gap:24px}
 })();
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=18"></script>
+<script type="module" src="/demo/assets/hill.js?v=20"></script>
 </body></html>`;

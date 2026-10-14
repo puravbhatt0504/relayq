@@ -333,7 +333,13 @@ When a run starts in full view, the camera follows one job's path with a caption
 
 **Ending it early:** Skip tour, Esc (leaves full view), dragging the canvas, or See inside all stop the tour and hand the camera back.
 
-**No tour when:** reduced motion is on, the window doesn't stage (narrow or portrait), or the hill is already open.
+**No tour when:** reduced motion is on, or the hill is already open.
+
+**Phones and portrait windows** (no full view): the page calls `relayqHill.tour()` and scrolls `#scene` to the middle of the screen.
+- While touring, the scene grows from 460 to 600 px (≤ 900 px wide), or from 400 to 540 px (≤ 640 px).
+- The card sits at the bottom of the scene, full width and compact, and `.hud` hides.
+- Shot distances scale by `max(1, 1.4 / aspect)` so each subject still fits.
+- `hill.js?v=20`.
 
 **Done** (Playwright 1440×900, fresh context, `?debug`):
 - T1: 1.5 s after Run, `debug().tour` is `{i:0,k:1}`, `.tour` is visible and `#scene.touring` is set.
@@ -341,6 +347,8 @@ When a run starts in full view, the camera follows one job's path with a caption
 - T3: Skip tour gives `i === -1` and the card hidden at once, and `k === 0` 3.2 s later.
 - T4: Esc during the tour gives `stage` false, `i === -1` and `k === 0` 3.5 s later.
 - T5: with reduced motion, Run gives `stage` true and `i === -1, k === 0`.
+- T6, 390×844 mobile: Run leaves `stage` false and the tour runs 0→4→done. During it, `#scene` is 540 px tall and fully in view, with the card ≤ 140 px. Afterwards it's back to 400 px, and `scrollWidth === 390`.
+- T7, 800×1100: Run gives `stage` false, the tour running, and `#scene` at 600 px.
 - Screenshots of all five stops reviewed.
 - `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
 
@@ -368,3 +376,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 15 Demo hill: "See inside" cutaway. Playwright 1440x900: C1 open state exact at 3.3 s, C2 vault 20 at 11.6 s and counts equal targets 5 ms after settle, C3 closed with pills back, C4 71 fps with 13 sparks, C5 reduced motion instant; light, dark and 390x844 reviewed.
 - [x] Phase 16 Demo hill: full view and orderly queue. F1 stage/exit/focus exact, F2 420x860 not staged, F3 7/7 in slot with min gap 2.4 m at 14 s, F4 reduced motion instant, C1 in full view; lint, tsc, demo tests pass.
 - [x] Phase 17 Demo hill: guided tour on Run. T1 start state exact, T2 stops at 4.8/9.5/20.9/32.4 s then done at 42.5 s (stops 3 and 4 hit their cap: the local worker was clearing a test backlog), T3 skip, T4 Esc, T5 reduced motion; lint, tsc, demo tests pass.
+- [x] Phase 17b Tour on phones and portrait windows (in the page). T6 390x844: tour done at 33.2 s, scene 540 px with a 127 px card, back to 400 px, no sideways scroll. T7 800x1100: tour running, scene 600 px. Desktop full view unchanged.

@@ -907,7 +907,7 @@ async function start() {
     { at: [6.5, profile(6.5) + 1, 0], dist: 25, yaw: 0.12, pitch: 0.36, tag: -1, wait: () => slipped > tour.s0, title: "Some slip",
       text: "One in five fails on its first try. The boulder rolls back and gets pushed again after a backoff. Out of tries, it goes to the dead letters." },
     { at: [FLAG_X - 1.5, profile(FLAG_X) + 1.8, 0], dist: 16, yaw: -0.3, pitch: 0.3, tag: 4, wait: () => delivered > tour.d0, title: "Delivered",
-      text: "Over the top, the job reaches your webhook and the flag waves. The card at the bottom left counts them in." },
+      text: "Over the top, the job reaches your webhook and the flag waves. The progress bar counts them in." },
   ];
   // A shot with `wait` holds past HOLD until that happens on the hill (then 2.5 s more, to see it),
   // or for at most 2.5 * HOLD: the hill only moves when the real queue does.
@@ -950,7 +950,8 @@ async function start() {
     } else if ((tour.end += dt) > 3) tour.k = 0;
     if (tour.i >= 0) {
       const s = TOUR[tour.i];
-      _tl.fromArray(s.at); _tp.set(_tl.x + Math.sin(s.yaw) * s.dist, _tl.y + s.dist * s.pitch, _tl.z + Math.cos(s.yaw) * s.dist);
+      const d = s.dist * Math.max(1, 1.4 / cam.aspect); // the shots are framed for a wide window; step back on narrower ones
+      _tl.fromArray(s.at); _tp.set(_tl.x + Math.sin(s.yaw) * d, _tl.y + d * s.pitch, _tl.z + Math.cos(s.yaw) * d);
     } else { _tp.copy(tour.np); _tl.copy(tour.nl); }
     const r = 1 - Math.exp(-dt * 2.4);
     tour.mid.lerp(_tp, r); tour.pos.lerp(tour.mid, r); tour.lmid.lerp(_tl, r); tour.look.lerp(tour.lmid, r);
@@ -1550,10 +1551,12 @@ async function start() {
     if (on === full.on) return;
     full.on = on; full.from = full.k; full.t = reduce ? 1 : 0;
     if (reduce) { full.k = on ? 1 : 0; render(); }
-    else if (on && !under.openness()) tourStart(); // reduced motion, or the hill already open: no tour
+    else if (on) tourHere(); // reduced motion, or the hill already open: no tour
     else tourStop();
   }
-  window.relayqHill = { ingest, stage };
+  // On a phone the run stays in the page; the page asks for the tour on its own.
+  const tourHere = () => { if (!reduce && !under.openness()) tourStart(); };
+  window.relayqHill = { ingest, stage, tour: tourHere };
   if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), tour: { i: tour.i, k: tour.k }, q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
