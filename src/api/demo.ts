@@ -180,7 +180,7 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .ctl{position:absolute;right:24px;top:24px;display:flex;gap:8px}
 .snd{display:inline-flex;align-items:center;gap:8px;font:500 12px var(--font);color:var(--fg-2);cursor:pointer;
   background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:7px 11px;backdrop-filter:blur(6px);transition:color .2s,transform .1s}
-.snd:hover{color:var(--fg)}.snd:active{transform:translateY(1px)}.snd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.snd[hidden]{display:none}.snd:hover{color:var(--fg)}.snd:active{transform:translateY(1px)}.snd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .eq{display:inline-flex;align-items:flex-end;gap:2px;height:10px}.eq i{width:2px;height:5px;border-radius:1px;background:var(--fg-3)}.eq i:nth-child(2){height:9px}.eq i:nth-child(3){height:6px}
 .snd[aria-pressed=true]{color:var(--fg)}.snd[aria-pressed=true] .eq i{background:var(--accent);animation:eq .9s ease-in-out infinite alternate}
 .snd[aria-pressed=true] .eq i:nth-child(2){animation-delay:-.3s}.snd[aria-pressed=true] .eq i:nth-child(3){animation-delay:-.6s}
@@ -188,6 +188,13 @@ h1 span{display:block}h1 .quiet{color:var(--fg-3)}
 .cut{position:relative;width:11px;height:11px;border:1.5px solid currentColor;border-radius:2px;overflow:hidden}
 .cut::after{content:"";position:absolute;left:0;right:0;bottom:0;height:45%;background:var(--fg-3);transition:background .2s}
 .snd[aria-pressed=true] .cut::after{background:var(--accent)}
+/* Full view: a run takes the whole window so the hill has room; Esc or Exit gives the page back. */
+body.stage{overflow:hidden}
+body.stage .scene{position:fixed;inset:0;z-index:40;height:auto;background:var(--sunken)}
+.scrim{transition:opacity .6s var(--ease)}body.stage .scrim{opacity:0}
+body.stage .scene .batch{position:absolute;left:24px;bottom:24px;margin:0;width:300px;max-width:calc(100% - 48px);z-index:2;
+  background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid var(--line);border-radius:8px;padding:12px 14px;backdrop-filter:blur(6px)}
+.x{position:relative;width:10px;height:10px}.x::before,.x::after{content:"";position:absolute;left:4px;top:-1px;width:1.5px;height:12px;background:currentColor;transform:rotate(45deg)}.x::after{transform:rotate(-45deg)}
 .nogl{position:absolute;inset:0;display:grid;place-items:center;padding:32px;text-align:center;color:var(--fg-2);font-size:14.5px}
 
 /* Panels */
@@ -322,6 +329,7 @@ footer nav{gap:24px}
   <div class="scene" id="scene">
     <canvas id="gl" role="img" aria-label="A 3D hill driven by live data. Each job is a boulder: it drops in through the API, lands on the Postgres slab, waits in line at the foot of the hill, and a worker pushes it up to the webhook flag at the top. Failed attempts roll back down and wait to be pushed again."></canvas><div class="scrim"></div>
     <div class="ctl">
+      <button class="snd" id="exit" type="button" hidden><span class="x" aria-hidden="true"></span><span>Exit full view</span></button>
       <button class="snd" id="xray" type="button" aria-pressed="false" hidden><span class="cut" aria-hidden="true"></span><span>See inside</span></button>
       <button class="snd" id="snd" type="button" aria-pressed="false" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>Sound off</span></button>
     </div>
@@ -503,17 +511,40 @@ footer nav{gap:24px}
     var c0=+$("n-completed").getAttribute("data-v")||0,d0=+$("n-http").getAttribute("data-v")||0;
     fetch("/demo/run",{method:"POST"}).then(function(r){return r.json().then(function(b){return{ok:r.ok,b:b}})}).then(function(x){
       if(x.ok){
-        msg.className="note ok";msg.textContent="100 boulders on their way. Watch for the amber ones.";cooldown(10);
+        msg.className="note ok";msg.textContent="100 boulders on their way. Watch for the amber ones.";cooldown(10);stage(true);
         batch={c0:c0,d0:d0,t0:Date.now()};$("batch").hidden=false;$("bfill").style.width="0%";$("btext").textContent="0 of 100 at the top";
       }
       else{msg.className="note err";msg.textContent="Someone else just started a run. "+(x.b.error||"Try again in a few seconds.");cooldown(5)}
     }).catch(function(){msg.className="note err";msg.textContent="Couldn't reach the API. Check your connection and try again.";btn.disabled=false});
   });
 
+  // Full view: on a run, the scene grows from where it sits to fill the window (clip-path reveal),
+  // the camera comes in closer and the batch progress moves into a card on the scene.
+  var scene=$("scene"),copy=document.querySelector(".copy"),bat=$("batch"),exitBtn=$("exit"),from=null;
+  var roomy=matchMedia("(min-width:700px) and (min-aspect-ratio:1/1)"),still=matchMedia("(prefers-reduced-motion: reduce)");
+  function inset(r){return "inset("+r.top+"px "+(innerWidth-r.right)+"px "+(innerHeight-r.bottom)+"px "+r.left+"px)"}
+  function stage(on){
+    var staged=document.body.classList.contains("stage");
+    if(on===staged||(on&&!roomy.matches))return;
+    if(window.relayqHill&&window.relayqHill.stage)window.relayqHill.stage(on);
+    if(on){
+      from=scene.getBoundingClientRect();
+      document.body.classList.add("stage");scene.appendChild(bat);exitBtn.hidden=false;
+      if(!still.matches&&scene.animate)scene.animate([{clipPath:inset(from)},{clipPath:"inset(0px 0px 0px 0px)"}],{duration:700,easing:"cubic-bezier(.2,.8,.2,1)"});
+      exitBtn.focus({preventScroll:true});
+      return;
+    }
+    function done(){document.body.classList.remove("stage");copy.appendChild(bat);exitBtn.hidden=true;btn.focus({preventScroll:true})}
+    if(still.matches||!scene.animate||!from)return done();
+    scene.animate([{clipPath:"inset(0px 0px 0px 0px)"},{clipPath:inset(from)}],{duration:500,easing:"cubic-bezier(.4,0,.2,1)"}).onfinish=done;
+  }
+  exitBtn.addEventListener("click",function(){stage(false)});
+  addEventListener("keydown",function(e){if(e.key==="Escape")stage(false)});
+
   tick();setInterval(tick,1000);
 
 })();
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=8"></script>
+<script type="module" src="/demo/assets/hill.js?v=16"></script>
 </body></html>`;

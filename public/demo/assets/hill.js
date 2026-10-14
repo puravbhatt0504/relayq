@@ -25,7 +25,11 @@ const UP = V(0, 1, 0), XAX = V(1, 0, 0);
 // and over the far edge at X2. A slip sends it rolling back into the hollow.
 const X0 = 0, X1 = 12, X2 = 17.5, H = 6, R = 0.8, G = 9.8;
 const LANES = [-7.5, -4.5, -1.5, 1.5, 4.5, 7.5];
-const FLAG_X = 15, START_X = -0.6, VIS = 16, MAX_PENDING = 24;
+const FLAG_X = 15, START_X = -0.6, VIS = 10, MAX_PENDING = 24;
+// Where waiting rocks stand: one line in three rows across the meadow in front of the slab, so from
+// the camera it reads left to right instead of stacking up in depth. The front is at the foot.
+const SLOTS = [[-1.0, 0.3], [-3.5, 0.3], [-5.0, 4.0], [-7.5, 4.0], [-10.0, 4.0], [-12.5, 4.0],
+  [-12.0, 7.6], [-9.5, 7.6], [-7.0, 7.6], [-4.5, 7.6]].map(([x, z]) => ({ x, z }));
 const SLAB = { x: -8.5, len: 4.4, wid: 4.6, tilt: 0.2, lift: 1.1 };
 
 function profile(x) {
@@ -418,6 +422,8 @@ async function start() {
   function panOf(p) { _sp.copy(p).project(cam); return clamp(_sp.x * 0.8, -0.9, 0.9); }
   function remove(b) { b.gone = true; scene.remove(b.m); stones.splice(stones.indexOf(b), 1); }
   const waiting = (b) => !b.gone && !b.held && !b.claimed && !b.dead && !b.out && b.fade === undefined;
+  // Off the slab and not behind it: past its front edge, or out on the meadow in front of it.
+  const inLine = (b) => b.p.x > SLAB.x + SLAB.len / 2 || b.p.z > SLAB.wid / 2 + 0.6;
 
   // Rolling physics for every boulder nobody is holding: gravity along the slope, rolling friction,
   // bounces, leaving the ground over an edge, and knocking into each other.
@@ -436,6 +442,18 @@ async function start() {
         if (hit > 3) { v.y = vg + hit * 0.2; v.x *= 0.8; v.z *= 0.8; puff(p.x, f - b.lift, p.z, 6, hit); impact(b, hit); }
         else { b.air = false; v.y = vg; if (hit > 1.2) { puff(p.x, f - b.lift, p.z, 3, hit); impact(b, hit); } }
       }
+      return;
+    }
+    // Once a waiting rock has slowed it rolls, in order, to its place in the line, and stays there
+    // (resting) until a worker comes for it. Bumps don't stop it; they only matter while it's moving fast.
+    if (b.slot && waiting(b) && Math.hypot(v.x, v.z) < 0.8) {
+      const dx = b.slot.x - p.x, dz = b.slot.z - p.z, d = Math.hypot(dx, dz);
+      v.set(0, 0, 0); b.gliding = d > 0.06;
+      if (b.gliding) {
+        const st = Math.min(d, 2.2 * dt);
+        roll(b, (dx / d) * st, (dz / d) * st);
+        p.x += (dx / d) * st; p.z += (dz / d) * st; p.y = floorAt(p.x, p.z) + b.lift;
+      } else b.rest = (b.rest || 0) + dt;
       return;
     }
     const [gx, gz] = grad(p.x, p.z), k = ((5 / 7) * G) / Math.sqrt(1 + gx * gx + gz * gz);
@@ -463,6 +481,7 @@ async function start() {
     for (let i = 0; i < stones.length; i++) for (let j = i + 1; j < stones.length; j++) {
       const a = stones[i], b = stones[j];
       if (a.held && b.held) continue;
+      if (((a.gliding && b.slot) || (b.gliding && a.slot)) && waiting(a) && waiting(b)) continue; // rocks finding their place in line slip past each other instead of jamming
       _n.subVectors(b.p, a.p);
       const min = (a.r + b.r) * 0.9, d2 = _n.lengthSq();
       if (d2 >= min * min) continue;
@@ -763,7 +782,7 @@ async function start() {
       if (!pending.length) return;
       if (w.state !== "idle" && w.state !== "return") continue;
       let b = null;
-      for (const s of stones) if (waiting(s) && !s.air && s.rest > 0.3 && s.p.x > SLAB.x + SLAB.len / 2 && (!b || s.seq < b.seq)) b = s; // never one stranded behind the slab
+      for (const s of stones) if (waiting(s) && !s.air && s.rest > 0.3 && inLine(s) && (!b || s.seq < b.seq)) b = s; // never one stranded behind the slab
       if (!b) {
         if (!spawnLeft && !stones.some(waiting)) spawnLeft = 1; // the picture fell behind the real queue
         return;
@@ -804,6 +823,10 @@ async function start() {
     let shown = 0; for (const b of stones) if (waiting(b)) shown++;
     spawnT -= dt;
     if (spawnT <= 0 && shown < VIS && spawnLeft > 0) { spawnLeft--; drop(); spawnT = 0.3; }
+    // The line: oldest first, two tidy rows at the foot of the hill instead of a heap in the hollow.
+    let n = 0;
+    for (const s of stones) s.slot = null;
+    for (const b of stones.filter((s) => waiting(s) && !s.air && inLine(s)).sort((a, c) => a.seq - c.seq)) b.slot = SLOTS[n++] || null;
     dispatch();
     for (const w of workers) stepWorker(w, dt);
     for (const b of stones) if (!b.held) physics(b, dt);
@@ -814,7 +837,7 @@ async function start() {
       if (b.out && !b.air && b.v.lengthSq() < 0.05 && b.p.x > X2 - 1) b.v.x += 0.6; // stalled on the brow: nudge it over
       if (b.p.x > X2 + 16 || b.p.y < -30 || Math.abs(b.p.z) > 40 || b.p.x < -40) remove(b);
       // Bounced behind the slab: nobody can push it over, so it fades and its job drops in again.
-      else if (waiting(b) && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = fadeStone(b.m.material); spawnLeft++; }
+      else if (waiting(b) && !b.slot && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = fadeStone(b.m.material); spawnLeft++; }
     }
     // Dead letters stay where they stop, red, until there are too many; the oldest ones fade out.
     while (deadQueue.length > 5) { const b = deadQueue.shift(); if (b.gone) continue; b.fade = 1; b.m.material = fadeStone(MAT.bad); }
@@ -864,31 +887,41 @@ async function start() {
   });
 
   // ---- Camera: a three-quarter view up the slope. On wide screens the frame shifts right so the
-  // copy on the left sits over open sky. Drag to swing it a little.
+  // copy on the left sits over open sky; in full view (a run fills the window) it comes in closer,
+  // centred. Drag to swing it a little.
   const cam = new THREE.PerspectiveCamera(30, 1, 0.5, 1500);
   const look = V(5.5, 2.6, 0);
   let sway = 0, swayT = 0, yaw = 0, yawT = 0, drag = null, clock = 0, shake = 0;
+  const full = { k: 0, on: false, from: 0, t: 1 }; // full view, eased over 1.2 s
+  function frameFor(fill) {
+    const wide = host.clientWidth > 900, shifted = wide && !fill, tanH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
+    // Side-on, for the cutaway: fit x -13.5..16.5 on the cut face into the part of the frame the
+    // copy doesn't cover (the right 56% when the film offset shifts the picture).
+    const f = shifted ? 0.56 : 1, shift = shifted ? 0.1 / (tanH * cam.aspect) : 0, span = 30 / f;
+    return {
+      film: shifted ? -0.2 : 0, yaw0: wide || fill ? -0.1 : -0.25, pitch: fill ? 0.48 : wide ? 0.2 : 0.26, // full view looks down more, so the lanes and the line spread apart
+      dist: fill ? Math.max(44, 38 / (2 * tanH * cam.aspect)) : wide ? 57 : Math.max(50, 54 / cam.aspect), lx: fill ? 3 : wide ? 3.5 : 3,
+      sdist: ZO + span / 2 / (tanH * cam.aspect), slx: -13.5 - span * (0.5 - f - shift),
+    };
+  }
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
     gl.setSize(w, h, false);
     cam.aspect = w / h;
-    const wide = w > 900;
-    cam.userData = { yaw0: wide ? -0.1 : -0.25, dist: wide ? 57 : Math.max(50, 54 / cam.aspect), pitch: wide ? 0.2 : 0.26 };
-    look.x = wide ? 3.5 : 3;
-    cam.filmOffset = (wide ? -0.2 : 0) * cam.getFilmWidth();
-    // Side-on, for the cutaway: fit x -13.5..16.5 on the cut face into the part of the frame the
-    // copy doesn't cover (the right 56% on wide screens, where the film offset shifts the picture).
-    const tanH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)), f = wide ? 0.56 : 1, shift = wide ? 0.1 / (tanH * cam.aspect) : 0, span = 30 / f;
-    cam.userData.sdist = ZO + span / 2 / (tanH * cam.aspect);
-    cam.userData.slx = -13.5 - span * (0.5 - f - shift);
+    cam.userData = { page: frameFor(false), fill: frameFor(true) };
     cam.updateProjectionMatrix();
     render();
   }
   function place() {
+    const u = cam.userData;
+    if (!u.page) return;
+    const F = (key) => u.page[key] + (u.fill[key] - u.page[key]) * full.k;
+    const film = F("film") * cam.getFilmWidth();
+    if (cam.filmOffset !== film) { cam.filmOffset = film; cam.updateProjectionMatrix(); }
     // xs.cam blends from the usual view to the side-on one for the cutaway.
-    const { yaw0 = -0.1, dist: d0 = 57, pitch: p0 = 0.2, sdist = 80, slx = 0 } = cam.userData, k = xs.cam, mix = (a, b) => a + (b - a) * k;
-    const a = mix(yaw0, 0) + (yaw + sway * 0.05) * (1 - 0.5 * k), dist = mix(d0, sdist), pitch = mix(p0, 0.05), lx = mix(look.x, slx), ly = mix(look.y, -3.2);
+    const k = xs.cam, mix = (a, b) => a + (b - a) * k;
+    const a = mix(F("yaw0"), 0) + (yaw + sway * 0.05) * (1 - 0.5 * k), dist = mix(F("dist"), F("sdist")), pitch = mix(F("pitch"), 0.05), lx = mix(F("lx"), F("slx")), ly = mix(look.y, -3.2);
     const hand = reduce ? 0 : 1; // a slow, small drift, as if the camera were held
     cam.position.set(lx + Math.sin(a) * dist + Math.sin(clock * 0.31) * 0.15 * hand + Math.sin(clock * 47) * shake, ly + dist * pitch + Math.sin(clock * 0.23 + 1) * 0.1 * hand + Math.sin(clock * 39 + 1) * shake * 0.7, look.z + Math.cos(a) * dist);
     cam.lookAt(lx + Math.sin(clock * 0.19) * 0.06 * hand, ly, look.z);
@@ -1222,7 +1255,7 @@ async function start() {
       }
       // Dust spills off the top of the cut as it sweeps through the hill.
       const sweep = XR.on ? t > 0.3 && t < 1.5 : t > 0.4 && t < 1.2;
-      if (sweep && !reduce && Math.random() < dt * 40) { const x = (cam.userData.slx || 0) - 18 + Math.random() * 40; puff(x, ground(x, xs.zc), xs.zc + 0.2, 1, 1.5, 1.4); }
+      if (sweep && !reduce && Math.random() < dt * 40) { const x = (cam.userData.page ? cam.userData.page.slx : 0) - 18 + Math.random() * 40; puff(x, ground(x, xs.zc), xs.zc + 0.2, 1, 1.5, 1.4); }
     }
     const _cv = V();
 
@@ -1393,6 +1426,7 @@ async function start() {
       hudT -= dt;
     }
     clock += raw;
+    if (full.t < 1) { full.t = Math.min(1, full.t + raw / 1.2); const e = full.t < 0.5 ? 4 * full.t ** 3 : 1 - (-2 * full.t + 2) ** 3 / 2; full.k = full.from + ((full.on ? 1 : 0) - full.from) * e; }
     shake *= Math.exp(-raw * 6);
     grass.uTime.value = clock;
     if (sfx.on) { // rolling rock: louder the more of it is moving, panned toward where it is
@@ -1445,8 +1479,14 @@ async function start() {
       xb.lastChild.textContent = on ? "Close the hill" : "See inside";
     });
   }
-  window.relayqHill = { ingest };
-  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = under.debug;
+  // The page asks for full view when a run starts, and back when the visitor leaves it.
+  function stage(on) {
+    if (on === full.on) return;
+    full.on = on; full.from = full.k; full.t = reduce ? 1 : 0;
+    if (reduce) { full.k = on ? 1 : 0; render(); }
+  }
+  window.relayqHill = { ingest, stage };
+  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
     for (let i = 0; i < 6; i++) { drop(); for (let k = 0; k < 40; k++) { for (const b of stones) physics(b, 0.025); collide(); } }

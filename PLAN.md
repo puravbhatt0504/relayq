@@ -286,6 +286,29 @@ The hill can be cut open to show the machinery under it. The surface keeps doing
 - Screenshots reviewed: open, light, dark, 390×844.
 - `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
 
+## Phase 16 — Demo hill: full view and an orderly queue
+
+A run takes the whole window so the hill has room, and waiting boulders stand in a line instead of a heap.
+
+**Files:** `public/demo/assets/hill.js` (`SLOTS`, `inLine`, the glide in `physics()`, `frameFor`, `stage`), `src/api/demo.ts` (`body.stage` CSS, `#exit`, `stage()` script, `hill.js?v=16`).
+
+**Full view.**
+- A successful Run with the window at least 700 px wide and not portrait adds `body.stage`. `.scene` becomes fixed full-window, `#batch` moves into it as a bottom-left card, and `#exit` shows and takes focus. The camera eases to `frameFor(true)` over 1.2 s.
+- Esc or `#exit` reverses it: `#batch` goes back to `.copy`, `#exit` hides, and focus returns to `#run`.
+- Narrow or portrait windows never stage. Reduced motion stages with no animation.
+
+**Queue.**
+- Waiting, grounded boulders that are `inLine` (past the slab's front edge, or on the meadow in front of it at `z > wid/2 + 0.6`) are sorted by `seq` and given `SLOTS[0..9]`. The front slot is (−1, 0.3), at the foot. Slots are 2.5 m apart in three rows: z 0.3, 4.0 and 7.6. `VIS = 10`.
+- A slotted boulder slower than 0.8 m/s rolls to its slot at 2.2 m/s. It passes through other queued boulders while gliding and rests once it is there. A slotted boulder is never faded as stranded.
+
+**Done** (Playwright, fresh context):
+- F1, 1440×900: after Run, `body.stage` is set, `#exit` is `display:flex` and focused. Esc gives `stage` false, `#exit` `none`, focus `run`, and `#batch` back inside `.copy`.
+- F2, 420×860: after a successful Run (`#msg` says "on their way"), `stage` is false.
+- F3, with `?debug`: within 20 s of Run, a sample with ≥ 5 slotted boulders has all of them within 0.3 m of their slot, and no two slotted boulders closer than 2.0 m.
+- F4: with `reducedMotion: "reduce"`, `stage` is true 0.4 s after Run and `#scene` has 0 running animations.
+- C1 still holds in full view: "See inside" gives `zc === 12.5` with every room open.
+- `npm run lint`, `npx tsc --noEmit` and `npx vitest run test/demo.test.ts` pass.
+
 ---
 
 ## Out of scope
@@ -308,3 +331,4 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 14 Token-protected /metrics
 - [x] `POST /embed` (sync embeddings for interactive use: PulseBoard search query and duplicate check; bulk stays on `embed.batch`). `test/embed-api.test.ts` 3 pass.
 - [x] Phase 15 Demo hill: "See inside" cutaway. Playwright 1440x900: C1 open state exact at 3.3 s, C2 vault 20 at 11.6 s and counts equal targets 5 ms after settle, C3 closed with pills back, C4 71 fps with 13 sparks, C5 reduced motion instant; light, dark and 390x844 reviewed.
+- [x] Phase 16 Demo hill: full view and orderly queue. F1 stage/exit/focus exact, F2 420x860 not staged, F3 7/7 in slot with min gap 2.4 m at 14 s, F4 reduced motion instant, C1 in full view; lint, tsc, demo tests pass.
