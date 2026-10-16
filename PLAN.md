@@ -298,8 +298,12 @@ A run takes the whole window so the hill has room, and waiting boulders stand in
 - Narrow or portrait windows never stage. Reduced motion stages with no animation.
 
 **Queue.**
-- Waiting, grounded boulders that are `inLine` (past the slab's front edge, or on the meadow in front of it at `z > wid/2 + 0.6`) are sorted by `seq` and given `SLOTS[0..9]`. The front slot is (−1, 0.3), at the foot. Slots are 2.5 m apart in three rows: z 0.3, 4.0 and 7.6. `VIS = 10`.
-- A slotted boulder slower than 0.8 m/s rolls to its slot at 2.2 m/s. It passes through other queued boulders while gliding and rests once it is there. A slotted boulder is never faded as stranded.
+- Waiting, grounded boulders that are `inLine` (past the slab's front edge, or on the meadow in front of it at `z > wid/2 + 0.6`) are sorted by `seq` and given `SLOTS[0..9]`. The front slot is (−1, 4), near the foot. Slots are 2.5 m apart in two rows, at z 4.0 and 7.6. The strip straight out from the slab (|z| < 3) stays clear, because new rocks roll off the slab there. `VIS = 10`.
+- A slotted boulder slower than 0.8 m/s rolls to its slot at 2.2 m/s. It moves into the slot's row first, keeping clear of the slab, then slides along the row.
+- While gliding it passes through any other waiting boulder. It rests once it reaches its slot, and a slotted boulder is never faded as stranded.
+- The slab has a rim on its back and sides (`lip()`), so rocks leave only over the front edge.
+- A collision impulse is capped at 4, so a rock falling onto another nudges it instead of launching it.
+- F5 (`?debug`, 40 s after Run): `debug().strays` (rocks faded as stranded) is at most 2.
 
 **Done** (Playwright, fresh context):
 - F1, 1440×900: after Run, `body.stage` is set, `#exit` is `display:flex` and focused. Esc gives `stage` false, `#exit` `none`, focus `run`, and `#batch` back inside `.copy`.
@@ -374,6 +378,6 @@ Cron/recurring jobs UI, multi-region, Kafka, custom queue implementation.
 - [x] Phase 14 Token-protected /metrics
 - [x] `POST /embed` (sync embeddings for interactive use: PulseBoard search query and duplicate check; bulk stays on `embed.batch`). `test/embed-api.test.ts` 3 pass.
 - [x] Phase 15 Demo hill: "See inside" cutaway. Playwright 1440x900: C1 open state exact at 3.3 s, C2 vault 20 at 11.6 s and counts equal targets 5 ms after settle, C3 closed with pills back, C4 71 fps with 13 sparks, C5 reduced motion instant; light, dark and 390x844 reviewed.
-- [x] Phase 16 Demo hill: full view and orderly queue. F1 stage/exit/focus exact, F2 420x860 not staged, F3 7/7 in slot with min gap 2.4 m at 14 s, F4 reduced motion instant, C1 in full view; lint, tsc, demo tests pass.
+- [x] Phase 16 Demo hill: full view and orderly queue (2026-10-16: slab rim, capped impulse and slots moved off the slab's exit, so strays per run fell from 16 of 31 landed to 0 of 16). F1 stage/exit/focus exact, F2 420x860 not staged, F3 7/7 in slot with min gap 2.4 m at 14 s, F4 reduced motion instant, C1 in full view; lint, tsc, demo tests pass.
 - [x] Phase 17 Demo hill: guided tour on Run. T1 start state exact, T2 stops at 4.8/9.5/20.9/32.4 s then done at 42.5 s (stops 3 and 4 hit their cap: the local worker was clearing a test backlog), T3 skip, T4 Esc, T5 reduced motion; lint, tsc, demo tests pass.
 - [x] Phase 17b Tour on phones and portrait windows (in the page). T6 390x844: tour done at 33.2 s, scene 540 px with a 127 px card, back to 400 px, no sideways scroll. T7 800x1100: tour running, scene 600 px. Desktop full view unchanged.

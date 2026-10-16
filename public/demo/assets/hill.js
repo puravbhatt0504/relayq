@@ -26,10 +26,11 @@ const UP = V(0, 1, 0), XAX = V(1, 0, 0);
 const X0 = 0, X1 = 12, X2 = 17.5, H = 6, R = 0.8, G = 9.8;
 const LANES = [-7.5, -4.5, -1.5, 1.5, 4.5, 7.5];
 const FLAG_X = 15, START_X = -0.6, VIS = 10, MAX_PENDING = 24;
-// Where waiting rocks stand: one line in three rows across the meadow in front of the slab, so from
-// the camera it reads left to right instead of stacking up in depth. The front is at the foot.
-const SLOTS = [[-1.0, 0.3], [-3.5, 0.3], [-5.0, 4.0], [-7.5, 4.0], [-10.0, 4.0], [-12.5, 4.0],
-  [-12.0, 7.6], [-9.5, 7.6], [-7.0, 7.6], [-4.5, 7.6]].map(([x, z]) => ({ x, z }));
+// Where waiting rocks stand: one line in two rows on the meadow in front of the slab, so from the
+// camera it reads left to right instead of stacking up in depth. The front is near the foot. The strip
+// straight out from the slab (|z| < 3) stays clear: that's where new rocks roll off it.
+const SLOTS = [[-1.0, 4.0], [-3.5, 4.0], [-6.0, 4.0], [-8.5, 4.0], [-11.0, 4.0],
+  [-12.0, 7.6], [-9.5, 7.6], [-7.0, 7.6], [-4.5, 7.6], [-2.0, 7.6]].map(([x, z]) => ({ x, z }));
 const SLAB = { x: -8.5, len: 4.4, wid: 4.6, tilt: 0.2, lift: 1.1 };
 
 function profile(x) {
@@ -424,6 +425,14 @@ async function start() {
   const waiting = (b) => !b.gone && !b.held && !b.claimed && !b.dead && !b.out && b.fade === undefined;
   // Off the slab and not behind it: past its front edge, or out on the meadow in front of it.
   const inLine = (b) => b.p.x > SLAB.x + SLAB.len / 2 || b.p.z > SLAB.wid / 2 + 0.6;
+  // The slab holds rocks like a rim on its back and sides, so they only leave over the front edge,
+  // toward the line. Without it a landing knocks the rocks already there off into the hollow.
+  const onSlab = (b) => slabTop(b.p.x, b.p.z) > -Infinity && b.p.y < SLAB_TOP + 3;
+  function lip(b) {
+    const hw = SLAB.wid / 2 - b.r * 0.5, bx = SLAB.x - SLAB.len / 2 + b.r * 0.5;
+    if (Math.abs(b.p.z) > hw) { b.p.z = Math.sign(b.p.z) * hw; if (b.v.z * b.p.z > 0) b.v.z *= -0.3; }
+    if (b.p.x < bx) { b.p.x = bx; if (b.v.x < 0) b.v.x *= -0.3; }
+  }
 
   // Rolling physics for every boulder nobody is holding: gravity along the slope, rolling friction,
   // bounces, leaving the ground over an edge, and knocking into each other.
@@ -431,7 +440,9 @@ async function start() {
     const p = b.p, v = b.v;
     if (b.air) {
       v.y -= G * dt;
+      const was = onSlab(b);
       p.addScaledVector(v, dt);
+      if (was) lip(b);
       roll(b, v.x * dt * 0.4, v.z * dt * 0.4);
       if (b.spinRate > 0.01) { b.m.quaternion.premultiply(_q.setFromAxisAngle(b.spin, b.spinRate * dt)); support(b); }
       const f = floorAt(p.x, p.z) + b.lift;
@@ -447,7 +458,10 @@ async function start() {
     // Once a waiting rock has slowed it rolls, in order, to its place in the line, and stays there
     // (resting) until a worker comes for it. Bumps don't stop it; they only matter while it's moving fast.
     if (b.slot && waiting(b) && Math.hypot(v.x, v.z) < 0.8) {
-      const dx = b.slot.x - p.x, dz = b.slot.z - p.z, d = Math.hypot(dx, dz);
+      // First into the slot's row, then along it: never cutting across the slab or its exit.
+      const inRow = Math.abs(b.slot.z - p.z) <= 0.06, nearSlab = Math.abs(p.z) < SLAB.wid / 2 + 1;
+      const tx = inRow ? b.slot.x : nearSlab ? Math.max(p.x, SLAB.x + SLAB.len / 2 + b.r) : p.x;
+      const dx = tx - p.x, dz = b.slot.z - p.z, d = Math.hypot(dx, dz);
       v.set(0, 0, 0); b.gliding = d > 0.06;
       if (b.gliding) {
         const st = Math.min(d, 2.2 * dt);
@@ -467,7 +481,9 @@ async function start() {
     if (floorAt(nx, nz) + b.lift > p.y + 0.3) { v.x *= -0.3; v.z *= -0.3; return; } // the slab's edge is a wall
     const vg = gx * v.x + gz * v.z;
     roll(b, nx - p.x, nz - p.z);
+    const was = onSlab(b);
     p.x = nx; p.z = nz;
+    if (was) lip(b);
     const fy = floorAt(nx, nz) + b.lift;
     if (fy < p.y + vg * dt - 0.06) { b.air = true; v.y = vg; p.y += vg * dt; } // the ground drops away faster than it rolls
     else {
@@ -481,7 +497,7 @@ async function start() {
     for (let i = 0; i < stones.length; i++) for (let j = i + 1; j < stones.length; j++) {
       const a = stones[i], b = stones[j];
       if (a.held && b.held) continue;
-      if (((a.gliding && b.slot) || (b.gliding && a.slot)) && waiting(a) && waiting(b)) continue; // rocks finding their place in line slip past each other instead of jamming
+      if ((a.gliding || b.gliding) && waiting(a) && waiting(b)) continue; // a rock finding its place in line slips past the others instead of jamming
       _n.subVectors(b.p, a.p);
       const min = (a.r + b.r) * 0.9, d2 = _n.lengthSq();
       if (d2 >= min * min) continue;
@@ -490,14 +506,16 @@ async function start() {
       const wa = a.held ? 0 : b.held ? 1 : 0.5, wb = b.held ? 0 : a.held ? 1 : 0.5;
       for (const [s, w, sign] of [[a, wa, -1], [b, wb, 1]]) {
         if (!w) continue;
+        const was = onSlab(s);
         s.p.x += sign * _n.x * over * w; s.p.z += sign * _n.z * over * w;
+        if (was) lip(s);
         if (s.air) s.p.y += sign * _n.y * over * w;
         s.rest = 0;
       }
       const rv = (b.v.x - a.v.x) * _n.x + (b.v.y - a.v.y) * _n.y + (b.v.z - a.v.z) * _n.z;
       if (rv < 0) {
         if (rv < -1.2) sfx.knock(-rv, panOf(a.p));
-        const jn = (-(1 + 0.25) * rv) / (wa + wb);
+        const jn = Math.min(4, (-(1 + 0.25) * rv) / (wa + wb)); // a rock falling onto another nudges it, it doesn't launch it
         a.v.addScaledVector(_n, -jn * wa); b.v.addScaledVector(_n, jn * wb);
       }
     }
@@ -602,7 +620,7 @@ async function start() {
   }
   const leanFor = (b, d) => 1.0 + 0.3 * Math.max(0, steepness(b.p.x, b.p.z, d)); // von Stuck: nearly flat, driving from the legs
 
-  let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null, landed = 0, deadTotal = 0;
+  let pending = [], spawnLeft = 0, spawnT = 0, delivered = 0, slipped = 0, base0 = null, landed = 0, deadTotal = 0, strays = 0;
   const _d = V();
   function pushDir(w, b) {
     if (!w.up) {
@@ -837,7 +855,7 @@ async function start() {
       if (b.out && !b.air && b.v.lengthSq() < 0.05 && b.p.x > X2 - 1) b.v.x += 0.6; // stalled on the brow: nudge it over
       if (b.p.x > X2 + 16 || b.p.y < -30 || Math.abs(b.p.z) > 40 || b.p.x < -40) remove(b);
       // Bounced behind the slab: nobody can push it over, so it fades and its job drops in again.
-      else if (waiting(b) && !b.slot && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = fadeStone(b.m.material); spawnLeft++; }
+      else if (waiting(b) && !b.slot && b.rest > 1 && b.p.x < SLAB.x + SLAB.len / 2 + b.r * 0.5 && slabTop(b.p.x, b.p.z) === -Infinity) { b.fade = 1; b.m.material = fadeStone(b.m.material); spawnLeft++; strays++; }
     }
     // Dead letters stay where they stop, red, until there are too many; the oldest ones fade out.
     while (deadQueue.length > 5) { const b = deadQueue.shift(); if (b.gone) continue; b.fade = 1; b.m.material = fadeStone(MAT.bad); }
@@ -1557,7 +1575,7 @@ async function start() {
   // On a phone the run stays in the page; the page asks for the tour on its own.
   const tourHere = () => { if (!reduce && !under.openness()) tourStart(); };
   window.relayqHill = { ingest, stage, tour: tourHere };
-  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), tour: { i: tour.i, k: tour.k }, q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
+  if (new URLSearchParams(location.search).has("debug")) window.relayqHill.debug = () => ({ ...under.debug(), tour: { i: tour.i, k: tour.k }, strays, landed, q: stones.filter(waiting).map((b) => [+b.p.x.toFixed(1), +b.p.z.toFixed(1), b.slot ? b.slot.x + "," + b.slot.z : "-", +(b.rest || 0).toFixed(2), !!b.air, +Math.hypot(b.v.x, b.v.z).toFixed(2), !!b.gliding, !!b.claimed]) });
   if (reduce) {
     // One still frame: a few boulders that have rolled off the slab and settled, workers at rest.
     for (let i = 0; i < 6; i++) { drop(); for (let k = 0; k < 40; k++) { for (const b of stones) physics(b, 0.025); collide(); } }

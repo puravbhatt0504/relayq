@@ -567,5 +567,5 @@ footer nav{gap:24px}
 })();
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"}}</script>
-<script type="module" src="/demo/assets/hill.js?v=20"></script>
+<script type="module" src="/demo/assets/hill.js?v=24"></script>
 </body></html>`;
