@@ -1,8 +1,31 @@
 # RelayQ
 
-Background-job service: apps `POST /jobs` over HTTP, BullMQ workers run them with retries,
-exponential backoff, a dead-letter queue, per-tenant rate limits and idempotency.
-First client: PulseBoard. Plan and contracts: [PLAN.md](PLAN.md).
+**A multi-tenant background-job service that doesn't lose or double-run jobs, even when workers are killed mid-flight.**
+
+**[Live demo →](https://relayq-demo.onrender.com/demo)** (free tier: the first visit after 15 min idle takes ~1 min to wake)
+
+[![RelayQ demo: 100 real jobs pushed up a hill by workers](docs/demo.gif)](docs/demo.mp4)
+
+Every boulder in the demo is a real job going through the real queue, and each push is a real HTTP call.
+
+| | |
+|---|---|
+| Throughput | **33,424 jobs/min**, 0 lost of 167,133 (one laptop, 3 workers × 5) |
+| Enqueue latency | p95 **130.6 ms**, median 85.4 ms |
+| Chaos test | 10k jobs, 10 worker `SIGKILL`s + an API kill → **0 lost, 0 duplicated** |
+
+## How it works
+
+- **No lost jobs:** `POST /jobs` writes the job and an outbox row in one Postgres transaction; a relay publishes the outbox to BullMQ with `SELECT … FOR UPDATE SKIP LOCKED`. A crash between "saved" and "queued" can't drop a job.
+- **No double effects:** side effects go through `once()`, an effect log keyed per job and step, and downstream calls carry an `Idempotency-Key`. A re-delivered job skips what already happened.
+- **Retries:** exponential backoff, a dead-letter queue with manual retry, per-tenant rate limits and queue caps, and idempotency keys on enqueue (24 h).
+- **Tracing:** OpenTelemetry `traceparent` flows from the client app through the API, outbox and relay to the worker, so one request shows as one trace. Prometheus and Grafana run in compose.
+- **Safe outbound calls:** webhooks are HMAC signed; tenant URLs that resolve to private, loopback or cloud-metadata addresses are refused at connect time.
+- **AI jobs:** `llm.complete` enforces per-tenant monthly budgets, a shared tokens-per-minute limit and a fallback model, and writes a cost ledger. `embed.batch` batches across jobs. `ml.retrain` promotes a new model only if its test MAE is no worse than the current one.
+- **Real client:** [PulseBoard](https://github.com/puravbhatt0504/pulseboard) (a board app) sends its email digests, board exports and embeddings through RelayQ.
+- **Cloud:** AWS CDK stack (ECS Fargate autoscaled on queue depth, RDS, ElastiCache, S3, CloudFront) that deletes itself on a fixed date and has a $25 budget alarm.
+
+Plan and contracts: [PLAN.md](PLAN.md).
 
 ## Run locally
 
@@ -34,7 +57,7 @@ Job types: `email.digest`, `board.export`, `webhook.deliver` (signed with `X-Rel
 
 ## Deploy
 
-**Live demo:** https://relayq-demo.onrender.com/demo (free tier: the first visit after 15 min idle takes ~1 min to wake).
+**Live demo:** see top.
 
 **Free demo (Render + Neon):** `render.yaml` runs api + relay + workers in one service (`dist/all.js`) with `DEMO=1`, which serves a public page at `/demo`. Free web services sleep after 15 min idle and wake on the next request (~1 min).
 
